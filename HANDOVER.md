@@ -38,7 +38,7 @@ results available as normal copy/move/preview/tray sources.
 - [x] Lifecycle fix — exit the process when the last normal Filer window closes
 - [x] Phase 9 — introduce a backward-compatible pane-kind model (`directory` / `search`)
 - [x] Phase 10 — add a search-pane shell and role-switching UI without changing directory-pane behavior
-- [ ] Phase 11 — implement cancellable, streaming filename search with explicit scope
+- [x] Phase 11 — implement cancellable, streaming filename search with explicit scope
 - [ ] Phase 12 — share selection, preview, tray, drag, copy, and move behavior with search results
 - [ ] Phase 13 — persist and restore search scope, query, options, and result presentation
 - [ ] Phase 14 — bring over advanced query/sort/history behavior from `File_Search_APP` selectively
@@ -69,6 +69,8 @@ results available as normal copy/move/preview/tray sources.
 - Chosen direction: search is a pane role, not a temporary palette. A search pane remains beside ordinary directory panes and acts as a first-class source for existing file operations.
 - Phase 9 implemented: pane roles and dormant search conditions now round-trip through session state. Sessions from older builds default safely to directory panes, and search results themselves are intentionally not serialized.
 - Phase 10 implemented: a directory pane can switch to a clearly identified search shell and back while retaining its directory context and draft query. Split, close, hover targeting, and drop rejection have explicit search-pane behavior.
+- Phase 11 implemented: search panes recursively scan an explicit root on a background thread, stream matching metadata in bounded batches, support cancellation/restart, and ignore events from superseded searches by client-generated request ID.
+- The MVP uses case-insensitive AND terms across names and, by default, full paths. Empty queries are rejected, directory links are not followed, unreadable locations are counted without aborting the scan, and results stop at a 50,000-item safety cap.
 
 ## Key integration points
 
@@ -142,6 +144,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-12: Completed Phase 8 asynchronous Workbench transfers with progress, cancellation, overlap prevention, race-safe completion, and actual-result tray updates. Full verification passed.
 - 2026-09-12: Planned the next track as role-switchable panes, beginning with a persistent search pane informed by `File_Search_APP`. No search implementation has started yet.
 - 2026-09-13: Completed Phases 9 and 10: persistent pane roles plus the directory/search switching shell. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 73 Rust tests (1 ignored benchmark), and a production build.
+- 2026-09-13: Completed Phase 11 background search and incremental result display. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 76 Rust tests (1 ignored benchmark), and a production build.
 
 ## Commit log
 
@@ -163,3 +166,4 @@ Each slice gets its own implementation commit followed by verification and a han
 - `bb2ec10` — `docs: plan role-switchable search panes`
 - `7fad931` — `feat: add persistent pane roles`
 - `b02616d` — `feat: add search pane shell`
+- `a59751e` — `feat: stream search pane results`
