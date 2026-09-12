@@ -12,7 +12,15 @@
   const win = getCurrentWindow()
   const label = win.label
 
-  type PaneState = { id: number; path: string; ref?: Pane }
+  type PaneState = {
+    id: number
+    /** Missing in old sessions; every newly created pane starts as a directory. */
+    kind: api.PaneKind
+    /** Directory context is retained even when a future pane role is active. */
+    path: string
+    search?: api.SavedSearchState
+    ref?: Pane
+  }
   /**
    * タブ = 横並びペインの集合。
    *
@@ -74,7 +82,7 @@
     const paneId = nextPaneId++
     const tab: TabState = {
       id: nextTabId++,
-      panes: [{ id: paneId, path }],
+      panes: [{ id: paneId, kind: 'directory', path }],
       activeId: paneId,
       trayItems: [],
     }
@@ -140,7 +148,7 @@
     const tab = activeTab
     if (!tab) return
     const idx = tab.panes.findIndex((p) => p.id === afterId)
-    const created = { id: nextPaneId++, path }
+    const created: PaneState = { id: nextPaneId++, kind: 'directory', path }
     tab.panes = [...tab.panes.slice(0, idx + 1), created, ...tab.panes.slice(idx + 1)]
     tab.activeId = created.id
     tabs = tabs // ネストした更新を描画に反映させる
@@ -264,6 +272,8 @@
       const activeIdx = Math.max(0, t.panes.findIndex((p) => p.id === t.activeId))
       const panes = t.panes.map((p) => ({
         path: p.ref?.currentPath() || p.path,
+        kind: p.kind,
+        search: p.search,
       }))
       return { panes, activePaneIndex: activeIdx, trayPaths: t.trayItems }
     })
@@ -293,10 +303,12 @@
           const tabId = nextTabId++
           const panes: PaneState[] = t.panes.map((p) => ({
             id: nextPaneId++,
+            kind: p.kind ?? 'directory',
             path: p.path,
+            search: p.search,
           }))
           if (panes.length === 0) {
-            panes.push({ id: nextPaneId++, path: await api.homeDir() })
+            panes.push({ id: nextPaneId++, kind: 'directory', path: await api.homeDir() })
           }
           const activeId = panes[t.activePaneIndex]?.id ?? panes[0].id
           restoredTabs.push({ id: tabId, panes, activeId, trayItems: t.trayPaths ?? [] })

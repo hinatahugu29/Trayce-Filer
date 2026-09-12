@@ -60,10 +60,31 @@ impl Default for Settings {
   }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PaneKind {
+  /// The default preserves sessions saved before pane roles were introduced.
+  #[default]
+  Directory,
+  Search,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SavedSearchState {
+  pub scope_paths: Vec<String>,
+  pub query: String,
+  pub match_path: bool,
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedPaneState {
   pub path: String,
+  #[serde(default)]
+  pub kind: PaneKind,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub search: Option<SavedSearchState>,
   #[serde(default)]
   pub selected_entry: Option<String>,
   #[serde(default)]
@@ -361,6 +382,27 @@ mod tests {
 
     assert_eq!(session.tabs.len(), 1);
     assert!(session.tabs[0].tray_paths.is_empty());
+    assert_eq!(session.tabs[0].panes[0].kind, PaneKind::Directory);
+    assert!(session.tabs[0].panes[0].search.is_none());
+  }
+
+  #[test]
+  fn search_pane_state_round_trips_without_results() {
+    let session: SessionState = serde_json::from_str(
+      r#"{"tabs":[{"panes":[{"path":"C:\\work","kind":"search","search":{"scopePaths":["C:\\work","D:\\assets"],"query":"blue icon","matchPath":true}}],"activePaneIndex":0}],"activeTabIndex":0}"#,
+    )
+    .unwrap();
+
+    let pane = &session.tabs[0].panes[0];
+    assert_eq!(pane.kind, PaneKind::Search);
+    let search = pane.search.as_ref().unwrap();
+    assert_eq!(search.scope_paths, vec![r"C:\work", r"D:\assets"]);
+    assert_eq!(search.query, "blue icon");
+    assert!(search.match_path);
+
+    let encoded = serde_json::to_string(&session).unwrap();
+    assert!(encoded.contains(r#""kind":"search""#));
+    assert!(!encoded.contains("results"));
   }
 
   /// 設定を追加する前の state.json でも読めること。

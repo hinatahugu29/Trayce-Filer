@@ -168,7 +168,23 @@ export const getSettings = () => invoke<Settings>('get_settings')
 export const saveSettings = (settings: Settings) => invoke<void>('save_settings', { settings })
 export const resetSettings = () => invoke<Settings>('reset_settings')
 
-export type SavedPaneState = { path: string; selectedEntry?: string; scrollTop?: number }
+/**
+ * A pane's role is persisted independently from its current filesystem context.
+ * Missing `kind` means directory so sessions written by older builds remain valid.
+ */
+export type PaneKind = 'directory' | 'search'
+export type SavedSearchState = {
+  scopePaths: string[]
+  query: string
+  matchPath: boolean
+}
+export type SavedPaneState = {
+  path: string
+  kind?: PaneKind
+  search?: SavedSearchState
+  selectedEntry?: string
+  scrollTop?: number
+}
 export type SavedTabState = { panes: SavedPaneState[]; activePaneIndex: number; trayPaths?: string[] }
 export type SessionState = { tabs: SavedTabState[]; activeTabIndex: number }
 
