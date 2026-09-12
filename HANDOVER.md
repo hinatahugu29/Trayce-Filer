@@ -70,4 +70,4 @@ The feature is intentionally an evolution rather than a direct copy:
 - `3f37899` — `docs: add tray workbench implementation handover`
 - `f9ec3a7` — `feat: add tab-local collection tray`
 - `fb97296` — `feat: transfer collected tray items`
-- Pending: Phase 3 Workbench integration commit.
+- `307a746` — `feat: send collection tray from workbench`
