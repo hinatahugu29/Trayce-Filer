@@ -174,7 +174,7 @@ pub fn toggle_overlay(app: &AppHandle) {
     .always_on_top(true)
     .skip_taskbar(true)
     .transparent(true) // 角丸の外側を抜くため
-    .resizable(false);
+    .resizable(true);
 
   // 画面の右端に寄せる。中央に出すと作業中の窓を隠してしまう。
   let builder = match app.primary_monitor() {
@@ -199,6 +199,55 @@ pub fn hide_overlay(app: AppHandle) {
   if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
     let _ = win.hide();
   }
+}
+
+/// オーバーレイの表示モード（コンパクトリスト ⇄ 大画面俯瞰ワークベンチ）を切り替える。
+#[tauri::command]
+pub fn set_overlay_mode(app: AppHandle, mode: String) -> Result<(), String> {
+  if let Some(win) = app.get_webview_window(OVERLAY_LABEL) {
+    let monitor = app.primary_monitor().ok().flatten();
+    if mode == "workbench" {
+      if let Some(m) = monitor {
+        let size = m.size();
+        let scale = m.scale_factor();
+        let logical_w = size.width as f64 / scale;
+        let logical_h = size.height as f64 / scale;
+        let target_w = (logical_w * 0.88).clamp(960.0, 1600.0);
+        let target_h = (logical_h * 0.84).clamp(650.0, 1000.0);
+        let target_x = (logical_w - target_w) / 2.0;
+        let target_y = (logical_h - target_h) / 2.0;
+        let _ = win.set_size(tauri::LogicalSize::new(target_w, target_h));
+        let _ = win.set_position(tauri::LogicalPosition::new(target_x, target_y));
+      } else {
+        let _ = win.set_size(tauri::LogicalSize::new(1100.0, 750.0));
+        let _ = win.center();
+      }
+    } else {
+      if let Some(m) = monitor {
+        let size = m.size();
+        let scale = m.scale_factor();
+        let logical_w = size.width as f64 / scale;
+        let logical_h = size.height as f64 / scale;
+        let _ = win.set_size(tauri::LogicalSize::new(380.0, 620.0));
+        let _ = win.set_position(tauri::LogicalPosition::new(
+          logical_w - 380.0 - 24.0,
+          (logical_h - 620.0) / 2.0,
+        ));
+      } else {
+        let _ = win.set_size(tauri::LogicalSize::new(380.0, 620.0));
+      }
+    }
+  }
+  Ok(())
+}
+
+/// 指定したラベルのウィンドウを閉じる。
+#[tauri::command]
+pub fn close_window(app: AppHandle, label: String) -> Result<(), String> {
+  if let Some(win) = app.get_webview_window(&label) {
+    win.close().map_err(|e| e.to_string())?;
+  }
+  Ok(())
 }
 
 #[cfg(test)]

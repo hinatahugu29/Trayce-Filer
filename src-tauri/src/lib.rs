@@ -148,6 +148,8 @@ pub fn run() {
       windows::register_window,
       windows::unregister_window,
       windows::hide_overlay,
+      windows::set_overlay_mode,
+      windows::close_window,
       store::list_favorites,
       store::toggle_favorite_cmd,
       store::remove_favorite,

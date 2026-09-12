@@ -206,6 +206,9 @@ export const setWindowPath = (label: string, path: string) =>
   invoke<void>('set_window_path', { label, path })
 export const touchWindow = (label: string) => invoke<void>('touch_window', { label })
 export const hideOverlay = () => invoke<void>('hide_overlay')
+export const setOverlayMode = (mode: 'compact' | 'workbench') =>
+  invoke<void>('set_overlay_mode', { mode })
+export const closeWindow = (label: string) => invoke<void>('close_window', { label })
 
 /** 診断用。画面内ログはウィンドウを閉じると消えるので Rust 側にも残す。 */
 export const logDnd = (message: string) => invoke<void>('log_dnd', { message }).catch(() => {})
