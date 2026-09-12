@@ -146,6 +146,30 @@ export const cancelTransfer = (id: number) => invoke<void>('cancel_transfer', { 
 export const TRANSFER_PROGRESS = 'transfer-progress'
 export const TRANSFER_DONE = 'transfer-done'
 
+export type SearchEntry = {
+  path: string
+  name: string
+  isDir: boolean
+  size: number
+  modified: number
+  ext: string
+}
+export type SearchBatchEvent = { id: string; entries: SearchEntry[]; scanned: number }
+export type SearchDoneEvent = {
+  id: string
+  matched: number
+  scanned: number
+  cancelled: boolean
+  truncated: boolean
+  warningCount: number
+  error: string | null
+}
+export const SEARCH_BATCH = 'search-batch'
+export const SEARCH_DONE = 'search-done'
+export const startSearch = (id: string, roots: string[], query: string, matchPath: boolean) =>
+  invoke<void>('start_search', { id, roots, query, matchPath })
+export const cancelSearch = (id: string) => invoke<void>('cancel_search', { id })
+
 /** 選択を1つの ZIP にまとめる。戻り値は作られた ZIP のパス。 */
 export const compressToZip = (paths: string[]) => invoke<string>('compress_to_zip', { paths })
 /** ZIP を同じ場所のフォルダへ展開する。戻り値は展開先。 */

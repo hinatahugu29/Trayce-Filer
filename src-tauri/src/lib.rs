@@ -1,5 +1,6 @@
 mod archive;
 mod fs_ops;
+mod search;
 mod store;
 mod transfer;
 mod undo;
@@ -61,6 +62,7 @@ pub fn run() {
     .manage(store::Store::default())
     .manage(watch::Watchers::default())
     .manage(fs_ops::Clipboard::default())
+    .manage(search::Searches::default())
     .manage(transfer::Transfers::default())
     .manage(undo::UndoStack::default())
     .setup(|app| {
@@ -137,6 +139,8 @@ pub fn run() {
       watch::unwatch_dir,
       transfer::start_transfer,
       transfer::cancel_transfer,
+      search::start_search,
+      search::cancel_search,
       undo::undo_state,
       undo::undo_last,
       windows::open_window,
