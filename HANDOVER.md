@@ -79,5 +79,5 @@ The feature is intentionally an evolution rather than a direct copy:
 - `307a746` — `feat: send collection tray from workbench`
 - `3839536` — `feat: add hover-target left-hand controls`
 - `e8ebb3c` — `docs: record hover-control milestone`
-- Pending: last-window process-exit fix.
+- `f000175` — `fix: exit after closing the last filer window`
 - `3839536` — `feat: add hover-target left-hand controls`
