@@ -25,7 +25,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - [x] Phase 1 — tab-local tray state, `Alt+Click`, marked-row UI, sidebar tray, session persistence
 - [x] Phase 2 — copy/move tray contents to the active pane using the existing transfer pipeline
 - [x] Phase 3 — expose the active tray in Workbench and support multi-item drop to a window
-- [ ] Phase 4 — refine left-hand/hover interactions based on real use
+- [x] Phase 4 — initial left-hand/hover interaction set; further refinement follows real use
 
 ## Current status
 
@@ -39,6 +39,8 @@ The feature is intentionally an evolution rather than a direct copy:
 - Copy keeps the tray intact; move removes only source paths reported as completed by the backend.
 - Phase 3 implemented: active-window tray state is synchronized through the Rust window registry and shown in Workbench as a draggable collection.
 - Workbench tray drag defaults to copy; holding Shift while dropping moves and clears the successfully transferred tray.
+- Phase 4 initial interaction set implemented: the hovered pane becomes the left-hand keyboard target, with active-pane fallback and a distinct green target outline.
+- Unmodified `Q/W/F/N/Space` perform parent/close/favorite/split/preview on that target; text inputs and existing modified shortcuts retain priority.
 
 ## Key integration points
 
@@ -64,6 +66,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - 2026-09-12: Completed Phase 2. Extended transfer completion events with completed source paths so tray state follows actual results rather than attempted inputs. Full frontend/Rust/build verification passed.
 - 2026-09-12: Completed Phase 3. Added cross-WebView tray synchronization, a Workbench collection strip, and safe-default multi-item card drops. Full automated verification passed.
 - 2026-09-12: Development app launched successfully. Runtime reported that the global hotkey was already owned by another running Filer instance; the new process itself reached the UI event loop and was then stopped.
+- 2026-09-12: Completed the initial Phase 4 hover-key layer. Svelte diagnostics, 48 frontend tests, 71 Rust tests (1 ignored benchmark), production build, and diff checks passed.
 
 ## Commit log
 
@@ -71,3 +74,4 @@ The feature is intentionally an evolution rather than a direct copy:
 - `f9ec3a7` — `feat: add tab-local collection tray`
 - `fb97296` — `feat: transfer collected tray items`
 - `307a746` — `feat: send collection tray from workbench`
+- Pending: Phase 4 hover-target shortcut commit.

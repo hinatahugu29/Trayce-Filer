@@ -33,6 +33,7 @@
    * 使い回してしまい、表示がタブ切り替え前のまま固まる。
    */
   let nextPaneId = 1
+  let hoveredPaneId: number | null = null
   let hotkey = ''
   let dragIcon = ''
   let hovering = false
@@ -180,6 +181,7 @@
     tab.panes = tab.panes.filter((p) => p.id !== id)
     if (tab.activeId === id) tab.activeId = tab.panes[0].id
     tabs = tabs
+    if (hoveredPaneId === id) hoveredPaneId = null
     syncWindowPath()
   }
 
@@ -405,12 +407,17 @@
             onOpenSettings={() => (settingsOpen = true)}
             {dragIcon}
             active={pane.id === activeTab.activeId}
+            keyboardTarget={pane.id === (hoveredPaneId ?? activeTab.activeId)}
             multi={activeTab.panes.length > 1}
             closable={activeTab.panes.length > 1}
             trayItems={activeTab.trayItems}
             onTrayToggle={toggleTrayItem}
             onTrayClear={clearTray}
             onTrayRemoveMany={removeTrayItems}
+            onHoverChange={(hovered) => {
+              if (hovered) hoveredPaneId = pane.id
+              else if (hoveredPaneId === pane.id) hoveredPaneId = null
+            }}
             onActivate={() => {
               activeTab.activeId = pane.id
               tabs = tabs
@@ -446,6 +453,7 @@
     <span>{activeTab?.panes.length ?? 0} ペイン{tabs.length > 1 ? ` / ${tabs.length} タブ` : ''}</span>
     <span class="spacer" />
     {#if notes[0]}<span class="note">{notes[0]}</span>{/if}
+    <span class="left-keys">Q 親へ · W 閉じる · F お気に入り · N 分割 · Space プレビュー</span>
     <span class="hotkey">{hotkey} で窓一覧 · Ctrl+T 新規タブ</span>
   </footer>
 </main>
@@ -607,5 +615,9 @@
   }
   .hotkey {
     color: #666;
+  }
+  .left-keys {
+    color: #6f988b;
+    white-space: nowrap;
   }
 </style>

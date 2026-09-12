@@ -22,6 +22,8 @@
   export let active = false
   /** 2枚以上ある状態。アクティブ表示を出すかどうかの判断に使う。 */
   export let multi = false
+  /** 左手単独キーの作用先。ホバー中ペインを優先し、無ければアクティブペイン。 */
+  export let keyboardTarget = false
 
   /** アプリ設定。窓レベルで読み込んで配る。 */
   export let settings: api.Settings
@@ -34,6 +36,7 @@
   export let onClose: () => void = () => {}
   export let onDetach: (path: string) => void = () => {}
   export let onActivate: () => void = () => {}
+  export let onHoverChange: (hovered: boolean) => void = () => {}
   export let trayItems: string[] = []
   export let onTrayToggle: (path: string) => void = () => {}
   export let onTrayClear: () => void = () => {}
@@ -478,11 +481,44 @@
    * このペインが操作対象でない時は何もしない。複数ペインで同時に反応すると事故になる。
    */
   function onPaneKey(ev: KeyboardEvent) {
-    if (multi && !active) return
+    if (!keyboardTarget) return
 
     // 入力欄で打っている最中はショートカットを奪わない。
     const el = ev.target as HTMLElement | null
     if (el && (el.tagName === 'INPUT' || el.isContentEditable)) return
+
+    // ChainFlow で定着している「右手で指し、左手で動詞を与える」単独キー。
+    // Ctrl 等との組み合わせは既存ショートカットへ譲り、キーリピートによる連打も防ぐ。
+    if (!ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.metaKey && !ev.repeat) {
+      switch (ev.key.toUpperCase()) {
+        case 'Q':
+          if (listing?.parent) {
+            ev.preventDefault()
+            open(listing.parent)
+          }
+          return
+        case 'W':
+          if (closable) {
+            ev.preventDefault()
+            onClose()
+          }
+          return
+        case 'F':
+          ev.preventDefault()
+          toggleFavorite()
+          return
+        case 'N':
+          if (listing) {
+            ev.preventDefault()
+            onSplit(listing.path)
+          }
+          return
+        case ' ':
+          ev.preventDefault()
+          showPreview = !showPreview
+          return
+      }
+    }
 
     // 割り当ては設定から引く。既定と設定の二重管理を避けるため、
     // ここでキーを直接書かない（shortcuts.ts が唯一の定義元）。
@@ -606,8 +642,10 @@
   class="pane"
   class:active
   class:multi
+  class:keyboard-target={keyboardTarget}
   bind:this={paneEl}
   on:pointerdown={onActivate}
+  on:pointerenter={() => onHoverChange(true)}
   on:pointermove={onResizeMove}
   on:pointerup={() => {
     resizing = false
@@ -616,6 +654,7 @@
   on:pointerleave={() => {
     resizing = false
     resizingPreview = false
+    onHoverChange(false)
   }}
 >
   <PathBar
@@ -836,6 +875,11 @@
   /* アクティブ側は上端に明示的な線を引く。背景差だけだと環境によっては潰れる。 */
   .pane.multi.active {
     box-shadow: inset 0 2px 0 0 #4c9aff;
+  }
+
+  /* 青はクリック上のアクティブ、緑は「今キーを押すと作用する場所」。 */
+  .pane.multi.keyboard-target {
+    box-shadow: inset 0 2px 0 0 #63cfad, inset 0 0 0 1px rgba(99, 207, 173, 0.22);
   }
 
   .actions {
