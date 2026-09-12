@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { startDrag } from '@crabnebula/tauri-plugin-drag'
-  import { formatSize, formatModified, joinPath } from './api'
+  import { formatSize, formatModified, joinPath, pathIdentity } from './api'
   import type { Entry, SortKey, SortSpec } from './api'
 
   export let entries: Entry[] = []
@@ -18,6 +18,8 @@
   export let onNote: (message: string) => void = () => {}
   export let onDelete: (paths: string[]) => void = () => {}
   export let onRename: (entry: Entry) => void = () => {}
+  export let trayItems: string[] = []
+  export let onTrayToggle: (path: string) => void = () => {}
   /**
    * 右クリック。`entry` が null なら空き領域での右クリック。
    * 呼び出し側はこれを見て「選択に対する操作」と「この場所に対する操作」を出し分ける。
@@ -90,6 +92,7 @@
   let anchor = 0
 
   const fullPath = (name: string) => joinPath(path, name)
+  $: trayKeys = new Set(trayItems.map(pathIdentity))
 
   function emitSelection() {
     onSelectionChange([...selected].map(fullPath))
@@ -110,6 +113,12 @@
   function onRowClick(index: number, row: Row, ev: MouseEvent) {
     cursor = index
     if (row.kind !== 'entry') return
+
+    if (ev.altKey) {
+      ev.preventDefault()
+      onTrayToggle(fullPath(row.entry.name))
+      return
+    }
 
     if (ev.shiftKey) {
       selectRange(anchor, index)
@@ -352,6 +361,7 @@
             class:selected={selected.has(entry.name)}
             class:cursor={index === cursor}
             class:hidden={entry.hidden}
+            class:in-tray={trayKeys.has(pathIdentity(fullPath(entry.name)))}
             style="height: {ROW_H}px"
             on:click={(e) => onRowClick(index, row, e)}
             on:dblclick={() => activate(row)}
@@ -362,6 +372,7 @@
             <span class="col c-name">
               <span class="icon">{entry.is_dir ? '📁' : '📄'}</span>
               <span class="name">{entry.name}</span>
+              {#if trayKeys.has(pathIdentity(fullPath(entry.name)))}<span class="tray-mark" title="トレイに登録済み">◈</span>{/if}
             </span>
             <span class="col c-ext">{entry.is_dir ? '' : entry.ext}</span>
             <span class="col c-size">{formatSize(entry.size, entry.is_dir)}</span>
@@ -440,6 +451,9 @@
   .row.selected {
     background: #2d4a6b;
   }
+  .row.in-tray { box-shadow: inset 3px 0 #58c6a5; }
+  .row.in-tray:not(.selected) { background: #20332f; }
+  .tray-mark { margin-left: auto; padding-right: 5px; color: #66d1ae; font-size: 10px; }
   /* キーボードの位置。選択とは別に示さないと、Shift 選択中に迷子になる。 */
   .row.cursor {
     box-shadow: inset 0 0 0 1px #4c9aff;

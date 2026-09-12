@@ -22,7 +22,7 @@ The feature is intentionally an evolution rather than a direct copy:
 
 ## Planned phases
 
-- [ ] Phase 1 — tab-local tray state, `Alt+Click`, marked-row UI, sidebar tray, session persistence
+- [x] Phase 1 — tab-local tray state, `Alt+Click`, marked-row UI, sidebar tray, session persistence
 - [ ] Phase 2 — copy/move tray contents to the active pane using the existing transfer pipeline
 - [ ] Phase 3 — expose the active tray in Workbench and support multi-item drop to a window
 - [ ] Phase 4 — refine left-hand/hover interactions based on real use
@@ -33,7 +33,8 @@ The feature is intentionally an evolution rather than a direct copy:
 - Existing frontend tests: 46 passing.
 - Existing Rust tests: 70 passing, 1 ignored benchmark.
 - Svelte diagnostics and both Tauri/Slint compilation checks passed before implementation.
-- No implementation changes have been made yet.
+- Phase 1 implemented: each tab owns a tray shared by its panes; `Alt+Click` toggles membership without changing normal selection.
+- Added marked-row treatment, a sidebar tray with missing-path status/removal, and backward-compatible session persistence.
 
 ## Key integration points
 
@@ -55,7 +56,9 @@ The feature is intentionally an evolution rather than a direct copy:
 ## Progress log
 
 - 2026-09-12: Created handover before implementation and established phased scope.
+- 2026-09-12: Completed Phase 1 implementation. Verification passed: Svelte diagnostics, 48 frontend tests, 71 Rust tests (plus 1 ignored benchmark), production web build, and `git diff --check`.
 
 ## Commit log
 
-- Pending: documentation/implementation kickoff.
+- `3f37899` — `docs: add tray workbench implementation handover`
+- Pending: Phase 1 implementation commit.

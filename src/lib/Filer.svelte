@@ -19,7 +19,7 @@
    * ペイン分割は「1つの作業」の中の見え方の話で、タブは「別の作業」を
    * 切り替える話。混ぜると、分割中に別の場所へ移るたび今の分割が壊れる。
    */
-  type TabState = { id: number; panes: PaneState[]; activeId: number }
+  type TabState = { id: number; panes: PaneState[]; activeId: number; trayItems: string[] }
 
   let tabs: TabState[] = []
   let activeTabId = 0
@@ -74,6 +74,7 @@
       id: nextTabId++,
       panes: [{ id: paneId, path }],
       activeId: paneId,
+      trayItems: [],
     }
     tabs = [...tabs, tab]
     activeTabId = tab.id
@@ -141,6 +142,27 @@
     tab.panes = [...tab.panes.slice(0, idx + 1), created, ...tab.panes.slice(idx + 1)]
     tab.activeId = created.id
     tabs = tabs // ネストした更新を描画に反映させる
+  }
+
+  function toggleTrayItem(path: string) {
+    const tab = activeTab
+    if (!tab) return
+    const key = api.pathIdentity(path)
+    const exists = tab.trayItems.some((item) => api.pathIdentity(item) === key)
+    tab.trayItems = exists
+      ? tab.trayItems.filter((item) => api.pathIdentity(item) !== key)
+      : [...tab.trayItems, path]
+    tabs = tabs
+    note(`${exists ? 'トレイから解除' : 'トレイへ追加'}: ${splitPath(path).tail || path}`)
+  }
+
+  function clearTray() {
+    const tab = activeTab
+    if (!tab || tab.trayItems.length === 0) return
+    const count = tab.trayItems.length
+    tab.trayItems = []
+    tabs = tabs
+    note(`トレイから ${count} 件を解除`)
   }
 
   function closePane(id: number) {
@@ -231,7 +253,7 @@
       const panes = t.panes.map((p) => ({
         path: p.ref?.currentPath() || p.path,
       }))
-      return { panes, activePaneIndex: activeIdx }
+      return { panes, activePaneIndex: activeIdx, trayPaths: t.trayItems }
     })
     const activeTabIdx = Math.max(0, tabs.findIndex((t) => t.id === activeTabId))
     if (sessionTabs.length > 0) {
@@ -265,7 +287,7 @@
             panes.push({ id: nextPaneId++, path: await api.homeDir() })
           }
           const activeId = panes[t.activePaneIndex]?.id ?? panes[0].id
-          restoredTabs.push({ id: tabId, panes, activeId })
+          restoredTabs.push({ id: tabId, panes, activeId, trayItems: t.trayPaths ?? [] })
         }
         tabs = restoredTabs
         const activeTabObj = tabs[savedSession.activeTabIndex] ?? tabs[0]
@@ -365,6 +387,9 @@
             active={pane.id === activeTab.activeId}
             multi={activeTab.panes.length > 1}
             closable={activeTab.panes.length > 1}
+            trayItems={activeTab.trayItems}
+            onTrayToggle={toggleTrayItem}
+            onTrayClear={clearTray}
             onActivate={() => {
               activeTab.activeId = pane.id
               tabs = tabs

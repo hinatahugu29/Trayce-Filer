@@ -8,6 +8,7 @@ import {
   formatSize,
   formatModified,
   joinPath,
+  pathIdentity,
 } from './api'
 
 describe('splitPath', () => {
@@ -72,6 +73,17 @@ describe('joinPath', () => {
   // ドライブ直下は `C:\` から `C:` に潰れてはいけない。
   it('ドライブ直下でも壊れない', () => {
     expect(joinPath('C:\\', 'Windows')).toBe('C:\\Windows')
+  })
+})
+
+describe('pathIdentity', () => {
+  it('Windows の大文字小文字と区切り表記の差を同一視する', () => {
+    expect(pathIdentity('C:\\Work\\File.txt')).toBe(pathIdentity('c:/work/file.TXT'))
+  })
+
+  it('末尾区切りを無視しつつドライブ根を壊さない', () => {
+    expect(pathIdentity('C:\\Work\\')).toBe(pathIdentity('c:\\work'))
+    expect(pathIdentity('C:\\')).toBe('c:\\')
   })
 })
 

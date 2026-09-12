@@ -3,6 +3,7 @@
   import Tree from './Tree.svelte'
   import Favorites from './Favorites.svelte'
   import History from './History.svelte'
+  import Tray from './Tray.svelte'
   import * as api from './api'
   import type { HistoryEntry } from './api'
 
@@ -10,9 +11,12 @@
   export let onNavigate: (path: string) => void
   /** 一覧の設定をツリーにも反映させる。 */
   export let showHidden = false
+  export let trayItems: string[] = []
+  export let onTrayRemove: (path: string) => void = () => {}
+  export let onTrayClear: () => void = () => {}
 
   /** どのタブを開くか。ペインごとに独立して覚える。 */
-  export let tab: 'tree' | 'favorites' | 'history' = 'tree'
+  export let tab: 'tree' | 'favorites' | 'history' | 'tray' = 'tree'
 
   let favorites: string[] = []
   let favoritesExist: boolean[] = []
@@ -64,6 +68,13 @@
       class:on={tab === 'history'}
       on:click={() => (tab = 'history')}>履歴</button
     >
+    <button
+      role="tab"
+      type="button"
+      aria-selected={tab === 'tray'}
+      class:on={tab === 'tray'}
+      on:click={() => (tab = 'tray')}>トレイ {trayItems.length || ''}</button
+    >
   </div>
 
   <div class="body">
@@ -77,7 +88,7 @@
         {onNavigate}
         onChanged={refresh}
       />
-    {:else}
+    {:else if tab === 'history'}
       <History
         items={history}
         missing={historyExist}
@@ -85,6 +96,8 @@
         {onNavigate}
         onChanged={refresh}
       />
+    {:else}
+      <Tray items={trayItems} {onNavigate} onRemove={onTrayRemove} onClear={onTrayClear} />
     {/if}
   </div>
 </div>

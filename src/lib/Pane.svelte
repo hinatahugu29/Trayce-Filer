@@ -34,6 +34,9 @@
   export let onClose: () => void = () => {}
   export let onDetach: (path: string) => void = () => {}
   export let onActivate: () => void = () => {}
+  export let trayItems: string[] = []
+  export let onTrayToggle: (path: string) => void = () => {}
+  export let onTrayClear: () => void = () => {}
 
   let listing: Listing | null = null
   let error: string | null = null
@@ -678,6 +681,9 @@
           currentPath={listing?.path ?? ''}
           onNavigate={open}
           showHidden={sort.showHidden}
+          {trayItems}
+          onTrayRemove={onTrayToggle}
+          {onTrayClear}
         />
       </div>
       <!-- 幅の調整つまみ。掴んでいる間だけ pointermove を効かせる。 -->
@@ -727,6 +733,8 @@
         onDelete={trashSelection}
         onRename={startRename}
         onContext={openContextMenu}
+        {trayItems}
+        {onTrayToggle}
         {onNote}
       />
 

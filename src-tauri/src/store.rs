@@ -75,6 +75,8 @@ pub struct SavedPaneState {
 pub struct SavedTabState {
   pub panes: Vec<SavedPaneState>,
   pub active_pane_index: usize,
+  #[serde(default)]
+  pub tray_paths: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -348,6 +350,17 @@ mod tests {
 
     let s: State = serde_json::from_str(r#"{"favorites":["C:\\a"]}"#).unwrap();
     assert_eq!(s.favorites, vec![r"C:\a".to_string()]);
+  }
+
+  #[test]
+  fn session_without_tray_restores_an_empty_tray() {
+    let session: SessionState = serde_json::from_str(
+      r#"{"tabs":[{"panes":[{"path":"C:\\work"}],"activePaneIndex":0}],"activeTabIndex":0}"#,
+    )
+    .unwrap();
+
+    assert_eq!(session.tabs.len(), 1);
+    assert!(session.tabs[0].tray_paths.is_empty());
   }
 
   /// 設定を追加する前の state.json でも読めること。

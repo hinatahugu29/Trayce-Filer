@@ -23,6 +23,15 @@ export function joinPath(dir: string, name: string): string {
   const sep = dir.includes('/') && !dir.includes('\\') ? '/' : '\\'
   return dir.replace(/[\\/]+$/, '') + sep + name
 }
+
+/** Windows パスをトレイ内の同一性比較に使える形へ揃える。表示用の元文字列は変えない。 */
+export function pathIdentity(path: string): string {
+  const normalized = path.replace(/\//g, '\\')
+  const withoutTrailing = /^[a-zA-Z]:\\$/.test(normalized)
+    ? normalized
+    : normalized.replace(/\\+$/, '')
+  return withoutTrailing.toLocaleLowerCase('en-US')
+}
 export type Listing = { path: string; parent: string | null; entries: Entry[] }
 
 export type SortKey = 'name' | 'size' | 'modified' | 'ext'
@@ -159,7 +168,7 @@ export const saveSettings = (settings: Settings) => invoke<void>('save_settings'
 export const resetSettings = () => invoke<Settings>('reset_settings')
 
 export type SavedPaneState = { path: string; selectedEntry?: string; scrollTop?: number }
-export type SavedTabState = { panes: SavedPaneState[]; activePaneIndex: number }
+export type SavedTabState = { panes: SavedPaneState[]; activePaneIndex: number; trayPaths?: string[] }
 export type SessionState = { tabs: SavedTabState[]; activeTabIndex: number }
 
 export const saveSessionState = (session: SessionState) =>
