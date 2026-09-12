@@ -1,0 +1,17 @@
+body {
+  margin: 0;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #1b1b1b;
+  color: #ddd;
+  overflow: hidden;
+}
+
+/* オーバーレイは角丸で浮かせるため、窓ごと透過させる。 */
+body.overlay {
+  background: transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #444 transparent;
+}

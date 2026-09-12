@@ -1,0 +1,565 @@
+<script lang="ts">
+  import { onMount, onDestroy } from 'svelte'
+  import { getCurrentWebview } from '@tauri-apps/api/webview'
+  import { getCurrentWindow } from '@tauri-apps/api/window'
+  import type { UnlistenFn } from '@tauri-apps/api/event'
+  import Pane from './Pane.svelte'
+  import SettingsDialog from './SettingsDialog.svelte'
+  import * as api from './api'
+  import { splitPath } from './api'
+  import { matchAction } from './shortcuts'
+
+  const win = getCurrentWindow()
+  const label = win.label
+
+  type PaneState = { id: number; path: string; ref?: Pane }
+  /**
+   * タブ = 横並びペインの集合。
+   *
+   * ペイン分割は「1つの作業」の中の見え方の話で、タブは「別の作業」を
+   * 切り替える話。混ぜると、分割中に別の場所へ移るたび今の分割が壊れる。
+   */
+  type TabState = { id: number; panes: PaneState[]; activeId: number }
+
+  let tabs: TabState[] = []
+  let activeTabId = 0
+  let nextTabId = 1
+  /**
+   * ペイン ID は全タブを通じて共有する採番にする。
+   *
+   * タブごとに 1 から採番すると、タブA・タブBのペインが同じ id を持ちうる。
+   * `{#each activeTab.panes as pane (pane.id)}` はこの id をキーにしているため、
+   * 同じ id なら別タブへ切り替えても Svelte が同一コンポーネントとみなして
+   * 使い回してしまい、表示がタブ切り替え前のまま固まる。
+   */
+  let nextPaneId = 1
+  let hotkey = ''
+  let dragIcon = ''
+  let hovering = false
+  let ready = false
+  /** アプリ設定。ペインより先に読み、全ペインへ配る。 */
+  let settings: api.Settings | null = null
+  let settingsOpen = false
+
+  $: activeTab = tabs.find((t) => t.id === activeTabId)
+
+  let notes: string[] = []
+  function note(message: string) {
+    notes = [`${new Date().toLocaleTimeString()}  ${message}`, ...notes].slice(0, 8)
+    api.logDnd(`[${label}] ${message}`)
+  }
+
+  /** タブに出す短い名前。アクティブなペインの末尾フォルダ名。 */
+  function tabLabel(tab: TabState): string {
+    const pane = tab.panes.find((p) => p.id === tab.activeId) ?? tab.panes[0]
+    return pane ? splitPath(pane.path).tail || pane.path : '…'
+  }
+
+  /** 表に出ているタブの、表に出ているペインの現在パス。 */
+  function activePanePath(): string | undefined {
+    const tab = activeTab
+    if (!tab) return undefined
+    return tab.panes.find((p) => p.id === tab.activeId)?.ref?.currentPath() ?? undefined
+  }
+
+  /** 窓のタイトルとレジストリには、いま表に出ているペインのパスを出す。 */
+  function syncWindowPath() {
+    const path = activePanePath()
+    if (path) api.setWindowPath(label, path)
+  }
+
+  function newTab(path: string) {
+    const paneId = nextPaneId++
+    const tab: TabState = {
+      id: nextTabId++,
+      panes: [{ id: paneId, path }],
+      activeId: paneId,
+    }
+    tabs = [...tabs, tab]
+    activeTabId = tab.id
+  }
+
+  let closedTabs: TabState[] = []
+  let dragTabIndex: number | null = null
+
+  function closeTab(id: number) {
+    if (tabs.length <= 1) return // 最後の1つは残す
+    const idx = tabs.findIndex((t) => t.id === id)
+    const target = tabs[idx]
+    if (target) {
+      closedTabs = [target, ...closedTabs].slice(0, 20)
+    }
+    tabs = tabs.filter((t) => t.id !== id)
+    if (activeTabId === id) {
+      activeTabId = tabs[Math.min(idx, tabs.length - 1)].id
+    }
+  }
+
+  function restoreClosedTab() {
+    if (closedTabs.length === 0) return
+    const [restored, ...rest] = closedTabs
+    closedTabs = rest
+    tabs = [...tabs, restored]
+    activeTabId = restored.id
+  }
+
+  function handleTabDragStart(index: number, ev: DragEvent) {
+    dragTabIndex = index
+    if (ev.dataTransfer) {
+      ev.dataTransfer.effectAllowed = 'move'
+    }
+  }
+
+  function handleTabDragOver(index: number, ev: DragEvent) {
+    if (dragTabIndex === null || dragTabIndex === index) return
+    ev.preventDefault()
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move'
+  }
+
+  function handleTabDrop(index: number, ev: DragEvent) {
+    if (dragTabIndex === null || dragTabIndex === index) return
+    ev.preventDefault()
+    const moved = tabs[dragTabIndex]
+    const next = [...tabs]
+    next.splice(dragTabIndex, 1)
+    next.splice(index, 0, moved)
+    tabs = next
+    dragTabIndex = null
+  }
+
+  function cycleTab(delta: number) {
+    if (tabs.length <= 1) return
+    const idx = tabs.findIndex((t) => t.id === activeTabId)
+    activeTabId = tabs[(idx + delta + tabs.length) % tabs.length].id
+  }
+
+  function splitPane(afterId: number, path: string) {
+    const tab = activeTab
+    if (!tab) return
+    const idx = tab.panes.findIndex((p) => p.id === afterId)
+    const created = { id: nextPaneId++, path }
+    tab.panes = [...tab.panes.slice(0, idx + 1), created, ...tab.panes.slice(idx + 1)]
+    tab.activeId = created.id
+    tabs = tabs // ネストした更新を描画に反映させる
+  }
+
+  function closePane(id: number) {
+    const tab = activeTab
+    if (!tab || tab.panes.length <= 1) return // 最後の1枚は残す
+    tab.panes = tab.panes.filter((p) => p.id !== id)
+    if (tab.activeId === id) tab.activeId = tab.panes[0].id
+    tabs = tabs
+    syncWindowPath()
+  }
+
+  /** ペインを独立した窓へ切り離す。分割の逆操作。 */
+  async function detachPane(id: number, path: string) {
+    await api.openWindow(path)
+    // 1枚しかない場合は、元のペインをそのまま残す（空にしない）。
+    if ((activeTab?.panes.length ?? 0) > 1) closePane(id)
+  }
+
+  /**
+   * 落とされた座標から、受け取るペインを決める。
+   *
+   * ドロップは窓単位で飛んでくるので、どのペインに落ちたかは自分で判定する必要がある。
+   * ここを間違えると、意図しないフォルダにファイルが入る。
+   */
+  function paneAt(x: number, y: number): PaneState | undefined {
+    const tab = activeTab
+    if (!tab) return undefined
+    const el = document.elementFromPoint(x, y)?.closest('[data-pane-id]')
+    if (el) {
+      const id = Number((el as HTMLElement).dataset.paneId)
+      const hit = tab.panes.find((p) => p.id === id)
+      if (hit) return hit
+    }
+    return tab.panes.find((p) => p.id === tab.activeId) ?? tab.panes[0]
+  }
+
+  function onWindowKey(ev: KeyboardEvent) {
+    const el = ev.target as HTMLElement | null
+    if (el && (el.tagName === 'INPUT' || el.isContentEditable)) return
+    if (!settings) return
+
+    switch (matchAction(ev, settings.shortcuts)) {
+      case 'newTab':
+        ev.preventDefault()
+        newTab(activePanePath() ?? tabs[0]?.panes[0]?.path ?? '')
+        break
+      case 'closeTab':
+        ev.preventDefault()
+        closeTab(activeTabId)
+        break
+      case 'restoreClosedTab':
+        ev.preventDefault()
+        restoreClosedTab()
+        break
+      case 'nextTab':
+        ev.preventDefault()
+        cycleTab(1)
+        break
+      case 'prevTab':
+        ev.preventDefault()
+        cycleTab(-1)
+        break
+      default:
+        break
+    }
+  }
+
+  let unlistenDrop: UnlistenFn | null = null
+  let unlistenFocus: UnlistenFn | null = null
+
+  /** 起動に失敗した理由。ここが埋まる時は画面が空のままになるので必ず見せる。 */
+  let bootError: string | null = null
+
+  onMount(async () => {
+    try {
+      await boot()
+    } catch (e) {
+      bootError = String(e)
+      api.logUi('error', `起動に失敗: ${e}`)
+    }
+  })
+
+  /** 現在の全タブ・ペインの状態を永続化保存する */
+  function saveCurrentSession() {
+    if (label !== 'main') return
+    const sessionTabs = tabs.map((t) => {
+      const activeIdx = Math.max(0, t.panes.findIndex((p) => p.id === t.activeId))
+      const panes = t.panes.map((p) => ({
+        path: p.ref?.currentPath() || p.path,
+      }))
+      return { panes, activePaneIndex: activeIdx }
+    })
+    const activeTabIdx = Math.max(0, tabs.findIndex((t) => t.id === activeTabId))
+    if (sessionTabs.length > 0) {
+      api.saveSessionState({ tabs: sessionTabs, activeTabIndex: activeTabIdx }).catch(() => {})
+    }
+  }
+
+  $: if (ready && tabs) {
+    saveCurrentSession()
+  }
+
+  async function boot() {
+    // 設定はペインを作る前に読む。ペインは初期状態（サイドバー等）をここから取る。
+    settings = await api.getSettings()
+    dragIcon = await api.dragPreviewIcon()
+    hotkey = await api.overlayHotkey()
+
+    // open_window で開かれた窓は、指定されたパスがレジストリに入っている。
+    const initialWindowPath = await api.windowInitialPath(label)
+    if (!initialWindowPath && label === 'main' && settings.restoreSession) {
+      const savedSession = await api.getSessionState()
+      if (savedSession && savedSession.tabs && savedSession.tabs.length > 0) {
+        const restoredTabs: TabState[] = []
+        for (const t of savedSession.tabs) {
+          const tabId = nextTabId++
+          const panes: PaneState[] = t.panes.map((p) => ({
+            id: nextPaneId++,
+            path: p.path,
+          }))
+          if (panes.length === 0) {
+            panes.push({ id: nextPaneId++, path: await api.homeDir() })
+          }
+          const activeId = panes[t.activePaneIndex]?.id ?? panes[0].id
+          restoredTabs.push({ id: tabId, panes, activeId })
+        }
+        tabs = restoredTabs
+        const activeTabObj = tabs[savedSession.activeTabIndex] ?? tabs[0]
+        activeTabId = activeTabObj.id
+      }
+    }
+
+    if (tabs.length === 0) {
+      const start = initialWindowPath ?? (await api.homeDir())
+      newTab(start)
+    }
+    ready = true
+
+    // main 窓は Rust の open_window を通らないので自己申告で登録する。
+    await api.registerWindow(label, activePanePath() ?? (await api.homeDir()))
+
+    unlistenDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
+      if (event.payload.type === 'over') {
+        hovering = true
+        return
+      }
+      hovering = false
+      if (event.payload.type !== 'drop') return
+
+      // 物理座標で来るので、CSS ピクセルへ直してから当たり判定する。
+      const dpr = window.devicePixelRatio || 1
+      const target = paneAt(event.payload.position.x / dpr, event.payload.position.y / dpr)
+      await target?.ref?.acceptDrop(event.payload.paths)
+    })
+
+    unlistenFocus = await win.onFocusChanged(({ payload }) => {
+      if (payload) api.touchWindow(label)
+    })
+  }
+
+  onDestroy(() => {
+    unlistenDrop?.()
+    unlistenFocus?.()
+  })
+</script>
+
+<svelte:window on:keydown={onWindowKey} />
+
+<main class:hovering>
+  {#if tabs.length > 1}
+    <div class="tabbar" role="tablist">
+      {#each tabs as tab, idx (tab.id)}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab.id === activeTabId}
+          class="tab"
+          class:on={tab.id === activeTabId}
+          draggable="true"
+          on:dragstart={(ev) => handleTabDragStart(idx, ev)}
+          on:dragover={(ev) => handleTabDragOver(idx, ev)}
+          on:drop={(ev) => handleTabDrop(idx, ev)}
+          on:click={() => (activeTabId = tab.id)}
+        >
+          <span class="tab-label">{tabLabel(tab)}</span>
+          <span
+            class="tab-close"
+            role="button"
+            tabindex="-1"
+            title="タブを閉じる (Ctrl+W)"
+            on:click|stopPropagation={() => closeTab(tab.id)}
+            on:keydown|stopPropagation={(e) => e.key === 'Enter' && closeTab(tab.id)}
+          >
+            ✕
+          </span>
+        </button>
+      {/each}
+      <button
+        type="button"
+        class="tab-new"
+        title="新しいタブ (Ctrl+T)"
+        on:click={() => newTab(activePanePath() ?? tabs[0]?.panes[0]?.path ?? '')}
+      >
+        ＋
+      </button>
+    </div>
+  {/if}
+
+  <div class="panes">
+    {#if activeTab && settings}
+      {#each activeTab.panes as pane, i (pane.id)}
+        {#if i > 0}
+          <div class="divider" />
+        {/if}
+        <div class="slot" data-pane-id={pane.id}>
+          <Pane
+            bind:this={pane.ref}
+            initialPath={pane.path}
+            {settings}
+            onOpenSettings={() => (settingsOpen = true)}
+            {dragIcon}
+            active={pane.id === activeTab.activeId}
+            multi={activeTab.panes.length > 1}
+            closable={activeTab.panes.length > 1}
+            onActivate={() => {
+              activeTab.activeId = pane.id
+              tabs = tabs
+              syncWindowPath()
+            }}
+            onPathChange={(path) => {
+              // タブラベルは末尾フォルダ名を出すので、移動のたびに更新しないと
+              // 「hinat」のまま固まって見える（実際のパスバーとタブ名が食い違う）。
+              pane.path = path
+              tabs = tabs
+              syncWindowPath()
+            }}
+            onNote={note}
+            onSplit={(path) => splitPane(pane.id, path)}
+            onClose={() => closePane(pane.id)}
+            onDetach={(path) => detachPane(pane.id, path)}
+          />
+        </div>
+      {/each}
+    {/if}
+
+    {#if bootError}
+      <div class="boot-error">
+        <strong>起動に失敗しました</strong>
+        <code>{bootError}</code>
+      </div>
+    {:else if !ready}
+      <div class="loading">読み込み中…</div>
+    {/if}
+  </div>
+
+  <footer>
+    <span>{activeTab?.panes.length ?? 0} ペイン{tabs.length > 1 ? ` / ${tabs.length} タブ` : ''}</span>
+    <span class="spacer" />
+    {#if notes[0]}<span class="note">{notes[0]}</span>{/if}
+    <span class="hotkey">{hotkey} で窓一覧 · Ctrl+T 新規タブ</span>
+  </footer>
+</main>
+
+<!-- 設定は窓に1つ。ペインごとに持つと同じものが複数開きうる。 -->
+<SettingsDialog
+  open={settingsOpen}
+  onClose={() => (settingsOpen = false)}
+  onSaved={(s) => {
+    settings = s
+    // ホットキーの変更は再起動が必要なので、ここでは表示だけ合わせる。
+    api.overlayHotkey().then((h) => (hotkey = h))
+  }}
+/>
+
+<style>
+  main {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    box-sizing: border-box;
+    border: 2px solid transparent;
+  }
+  /* 落とせる状態が分かるように枠を光らせる。 */
+  main.hovering {
+    border-color: #4c9aff;
+  }
+
+  .tabbar {
+    display: flex;
+    align-items: stretch;
+    flex: none;
+    background: #191919;
+    border-bottom: 1px solid #333;
+    overflow-x: auto;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    max-width: 200px;
+    padding: 6px 8px 6px 12px;
+    background: none;
+    border: 0;
+    border-right: 1px solid #2c2c2c;
+    border-bottom: 2px solid transparent;
+    color: #888;
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+  .tab:hover {
+    background: #222;
+    color: #ccc;
+  }
+  .tab.on {
+    background: #232323;
+    border-bottom-color: #4c9aff;
+    color: #fff;
+  }
+  .tab-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tab-close {
+    flex: none;
+    width: 15px;
+    height: 15px;
+    border-radius: 3px;
+    text-align: center;
+    line-height: 15px;
+    font-size: 10px;
+    color: #777;
+  }
+  .tab-close:hover {
+    background: #4a2020;
+    color: #ff9b9b;
+  }
+  .tab-new {
+    flex: none;
+    width: 30px;
+    background: none;
+    border: 0;
+    color: #777;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .tab-new:hover {
+    background: #222;
+    color: #ccc;
+  }
+
+  .panes {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+  .slot {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .divider {
+    width: 1px;
+    flex: none;
+    background: #3a3a3a;
+  }
+
+  .loading {
+    margin: auto;
+    color: #666;
+    font-size: 12px;
+  }
+
+  .boot-error {
+    margin: auto;
+    max-width: 70%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px 18px;
+    background: #3a1d1d;
+    border-left: 3px solid #e05252;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #ffb4b4;
+  }
+  .boot-error code {
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    color: #ff9b9b;
+    word-break: break-all;
+  }
+
+  footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: none;
+    padding: 5px 14px;
+    border-top: 1px solid #333;
+    background: #1d1d1d;
+    font-size: 11px;
+    color: #777;
+  }
+  .spacer {
+    flex: 1;
+  }
+  .note {
+    color: #6bd968;
+    font-family: Consolas, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 45%;
+  }
+  .hotkey {
+    color: #666;
+  }
+</style>
