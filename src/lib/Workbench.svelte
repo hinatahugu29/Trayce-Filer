@@ -1,7 +1,11 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte'
+  import { listen } from '@tauri-apps/api/event'
+  import type { UnlistenFn } from '@tauri-apps/api/event'
   import * as api from './api'
   import { splitPath, pathHue, elideLeft, formatSize, joinPath } from './api'
   import type { WindowInfo, Entry } from './api'
+  import TransferBar from './TransferBar.svelte'
 
   export let windows: WindowInfo[] = []
   export let pinned: boolean = false
@@ -24,6 +28,31 @@
   } | null = null
   let dropTargetLabel: string | null = null
   let isCopyMode = false
+  let progress: api.ProgressEvent | null = null
+  let activeTransfer: {
+    id: number
+    srcWindowLabel: string
+    targetLabel: string
+    targetDir: string
+    name: string
+    moveFiles: boolean
+    fromTray: boolean
+  } | null = null
+  let startingTransfer = false
+  let earlyProgress: api.ProgressEvent | null = null
+  let earlyDone: api.DoneEvent | null = null
+
+  // listen のコールバックが await 中に書き換える値。関数境界を置くことで、
+  // TypeScript に「直前に null を入れたまま」と誤って狭められないようにする。
+  function takeEarlyEvents() {
+    const buffered: { progress: api.ProgressEvent | null; done: api.DoneEvent | null } = {
+      progress: earlyProgress,
+      done: earlyDone,
+    }
+    earlyProgress = null
+    earlyDone = null
+    return buffered
+  }
 
   // 表示対象ウィンドウと退避中ウィンドウ
   $: visibleWindows = windows.filter((w) => !hiddenLabels.has(w.label))
@@ -131,6 +160,10 @@
 
   function handleCardDragOver(win: WindowInfo, ev: DragEvent) {
     ev.preventDefault()
+    if (activeTransfer) {
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'none'
+      return
+    }
     if (!draggingItem || (!draggingItem.fromTray && draggingItem.srcWindowLabel === win.label)) {
       if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'none'
       return
@@ -152,40 +185,92 @@
   async function handleCardDrop(win: WindowInfo, ev: DragEvent) {
     ev.preventDefault()
     dropTargetLabel = null
+    if (activeTransfer) {
+      onNote('転送中です。完了または中断後にもう一度操作してください')
+      return
+    }
     if (!draggingItem || (!draggingItem.fromTray && draggingItem.srcWindowLabel === win.label)) return
 
-    const srcPaths = draggingItem.paths
-    const srcWindowLabel = draggingItem.srcWindowLabel
+    const dragged = draggingItem
+    const srcPaths = dragged.paths
+    const srcWindowLabel = dragged.srcWindowLabel
     const targetDir = win.path
     // 通常項目は従来どおり Ctrl でコピー。収集トレイは安全側のコピーを既定にし、Shift で移動。
-    const moveFiles = draggingItem.fromTray ? ev.shiftKey : !ev.ctrlKey
+    const moveFiles = dragged.fromTray ? ev.shiftKey : !ev.ctrlKey
 
     try {
-      await api.acceptDropped(srcPaths, targetDir, moveFiles)
-      const actionName = moveFiles ? '移動' : 'コピー'
-      onNote(`「${draggingItem.name}」を ${actionName}しました`)
-
-      if (moveFiles && draggingItem.fromTray) {
-        const source = windows.find((w) => w.label === srcWindowLabel)
-        const moved = new Set(srcPaths.map(api.pathIdentity))
-        const remaining = source
-          ? source.tray_paths.filter((path) => !moved.has(api.pathIdentity(path)))
-          : []
-        await api.setWindowTray(srcWindowLabel, remaining)
-        if (source) source.tray_paths = remaining
-        windows = windows
+      startingTransfer = true
+      earlyProgress = null
+      earlyDone = null
+      const id = await api.startTransfer(srcPaths, targetDir, moveFiles)
+      activeTransfer = {
+        id,
+        srcWindowLabel,
+        targetLabel: win.label,
+        targetDir,
+        name: dragged.name,
+        moveFiles,
+        fromTray: dragged.fromTray,
       }
-
-      // 移動元と移動先のファイル一覧を最新化
-      const srcWin = windows.find((w) => w.label === srcWindowLabel)
-      if (srcWin) refreshDir(srcWin.path)
-      refreshDir(targetDir)
+      onNote(`「${dragged.name}」の${moveFiles ? '移動' : 'コピー'}を開始しました`)
+      startingTransfer = false
+      const buffered = takeEarlyEvents()
+      if (buffered.progress?.id === id) progress = buffered.progress
+      if (buffered.done?.id === id) await finishTransfer(buffered.done)
     } catch (e) {
-      onNote(`ファイル操作に失敗: ${e}`)
+      startingTransfer = false
+      onNote(`転送を開始できません: ${e}`)
     } finally {
       draggingItem = null
     }
   }
+
+  let unlistenProgress: UnlistenFn | null = null
+  let unlistenDone: UnlistenFn | null = null
+
+  async function finishTransfer(payload: api.DoneEvent) {
+    const job = activeTransfer
+    if (!job || payload.id !== job.id) return
+
+    const { cancelled, created, completedSources, error } = payload
+    progress = null
+    activeTransfer = null
+
+    if (job.moveFiles && job.fromTray && completedSources.length) {
+      const source = windows.find((w) => w.label === job.srcWindowLabel)
+      const moved = new Set(completedSources.map(api.pathIdentity))
+      const remaining = source
+        ? source.tray_paths.filter((path) => !moved.has(api.pathIdentity(path)))
+        : []
+      await api.setWindowTray(job.srcWindowLabel, remaining)
+      if (source) source.tray_paths = remaining
+      windows = windows
+    }
+
+    const source = windows.find((w) => w.label === job.srcWindowLabel)
+    if (source) await refreshDir(source.path)
+    await refreshDir(job.targetDir)
+
+    if (error) onNote(`転送に失敗: ${error}`)
+    else if (cancelled) onNote(`転送を中断しました（完了 ${created}件）`)
+    else onNote(`「${job.name}」を${job.moveFiles ? '移動' : 'コピー'}しました（${created}件）`)
+  }
+
+  onMount(async () => {
+    unlistenProgress = await listen<api.ProgressEvent>(api.TRANSFER_PROGRESS, (ev) => {
+      if (ev.payload.id === activeTransfer?.id) progress = ev.payload
+      else if (startingTransfer) earlyProgress = ev.payload
+    })
+    unlistenDone = await listen<api.DoneEvent>(api.TRANSFER_DONE, async (ev) => {
+      if (ev.payload.id === activeTransfer?.id) await finishTransfer(ev.payload)
+      else if (startingTransfer) earlyDone = ev.payload
+    })
+  })
+
+  onDestroy(() => {
+    unlistenProgress?.()
+    unlistenDone?.()
+  })
 
   // ファイルの種類に応じた絵文字アイコン
   function fileIcon(entry: Entry): string {
@@ -212,6 +297,7 @@
       <div
         class="card"
         class:drop-target={isDropTarget}
+        class:transferring={activeTransfer?.targetLabel === w.label}
         style="--hue: {pathHue(w.path)}"
         on:click={() => onSelectWindow(w)}
         on:keydown={(e) => e.key === 'Enter' && onSelectWindow(w)}
@@ -263,6 +349,12 @@
         {#if isDropTarget}
           <div class="drop-banner">
             <span>{isCopyMode ? '📥 ここへコピー' : '📦 ここへ移動'}</span>
+          </div>
+        {/if}
+
+        {#if activeTransfer?.targetLabel === w.label}
+          <div class="transfer-badge">
+            {progress?.scanning ? '転送量を集計中…' : `${progress?.filesDone ?? 0} / ${progress?.filesTotal ?? '…'} 件`}
           </div>
         {/if}
 
@@ -381,6 +473,7 @@
       </div>
     </div>
   {/if}
+  <TransferBar {progress} />
 </div>
 
 <style>
@@ -454,6 +547,8 @@
     box-shadow: 0 0 16px rgba(59, 130, 246, 0.45);
     transform: scale(1.005);
   }
+  .card.transferring { border-color: #4c9aff; box-shadow: 0 0 14px rgba(76, 154, 255, .3); }
+  .transfer-badge { position: absolute; z-index: 11; top: 51px; right: 9px; padding: 4px 8px; border-radius: 4px; background: #214a73; color: #d7eaff; font-size: 10px; pointer-events: none; }
 
   .drop-banner {
     position: absolute;

@@ -29,6 +29,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - [x] Phase 5 — partial tray selection, partial transfer, and per-item Workbench drag
 - [x] Phase 6 — integrate hover/left-hand controls into configurable shortcut infrastructure
 - [x] Phase 7 — clarify tray destination and add selected-only removal
+- [x] Phase 8 — asynchronous Workbench transfer with progress, cancellation, and race-safe completion
 - [x] Lifecycle fix — exit the process when the last normal Filer window closes
 
 ## Current status
@@ -51,6 +52,8 @@ The feature is intentionally an evolution rather than a direct copy:
 - Space key events are normalized to the readable `Space` setting name and covered by regression tests.
 - Phase 7 implemented: each pane's tray names its receiving folder and selected entries can be removed without affecting files or unselected tray entries.
 - Lifecycle fix implemented: the hidden overlay no longer keeps `app.exe` alive after the last normal Filer window closes. Closing one of several Filer windows still leaves the process running.
+- Phase 8 implemented: Workbench drops use the shared background transfer/undo engine, render progress on the destination card and bottom bar, allow cancellation, and block overlapping drops.
+- Completion handling removes only actually moved tray sources, refreshes both sides, distinguishes success/cancel/error, and buffers events that can arrive before the start call returns.
 
 ## Key integration points
 
@@ -81,6 +84,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - 2026-09-12: Completed Phase 6 configurable hover controls and Space normalization. Full frontend/Rust/build verification passed.
 - 2026-09-12: Completed Phase 7 destination clarity and selected-only tray removal. Full verification passed.
 - 2026-09-12: Fixed application shutdown semantics after real-device testing revealed that the hidden reusable overlay kept the release executable locked.
+- 2026-09-12: Completed Phase 8 asynchronous Workbench transfers with progress, cancellation, overlap prevention, race-safe completion, and actual-result tray updates. Full verification passed.
 
 ## Commit log
 
@@ -96,3 +100,5 @@ The feature is intentionally an evolution rather than a direct copy:
 - `94d0b99` — `docs: record partial tray milestone`
 - `c59745b` — `feat: make hover controls configurable`
 - `4e9e910` — `feat: clarify tray transfer targets`
+- `a5ca2af` — `docs: record shortcut and tray polish`
+- Pending: Phase 8 asynchronous Workbench transfer commit.
