@@ -18,7 +18,11 @@ component FilePane inherits Rectangle {
     in-out property <int> selected_index: -1;
     in-out property <bool> is_active: true;
     in-out property <string> filter_text: "";
+    in-out property <bool> can_go_back: false;
+    in-out property <bool> can_go_forward: false;
 
+    callback navigate_back();
+    callback navigate_forward();
     callback navigate_up();
     callback refresh();
     callback new_folder();
@@ -39,7 +43,6 @@ component FilePane inherits Rectangle {
         spacing: 0px;
 
         // ★思想1: 左端のカラーバンド（pathHue）
-        // フォルダごとに固有の鮮やかな色になり、視覚的に「あの場所だ」と直感認識
         Rectangle {
             width: 5px;
             background: root.hue_color;
@@ -50,8 +53,7 @@ component FilePane inherits Rectangle {
             padding: 8px;
             spacing: 6px;
 
-            // ★思想3: タイポグラフィの強弱
-            // 末尾のフォルダ名を大見出し太字に、親パスを小さく文脈として表示
+            // ★思想3: タイポグラフィの強弱（主役フォルダ名の大見出し太字化）
             Rectangle {
                 height: 38px;
                 background: is_active ? #202026 : #18181b;
@@ -89,7 +91,47 @@ component FilePane inherits Rectangle {
                         spacing: 4px;
                         alignment: center;
 
-                        // 上へ戻る（親フォルダ）
+                        // 戻る（Alt+Left）
+                        Rectangle {
+                            width: 26px;
+                            height: 26px;
+                            background: !root.can_go_back ? #18181c : (back_touch.has_hover ? #3b82f6 : #27272e);
+                            border-radius: 4px;
+                            Text {
+                                text: "←";
+                                color: root.can_go_back ? #f8fafc : #475569;
+                                font-size: 13px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            back_touch := TouchArea {
+                                enabled: root.can_go_back;
+                                clicked => { root.navigate_back(); }
+                            }
+                        }
+
+                        // 進む（Alt+Right）
+                        Rectangle {
+                            width: 26px;
+                            height: 26px;
+                            background: !root.can_go_forward ? #18181c : (fwd_touch.has_hover ? #3b82f6 : #27272e);
+                            border-radius: 4px;
+                            Text {
+                                text: "→";
+                                color: root.can_go_forward ? #f8fafc : #475569;
+                                font-size: 13px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            fwd_touch := TouchArea {
+                                enabled: root.can_go_forward;
+                                clicked => { root.navigate_forward(); }
+                            }
+                        }
+
+                        // 上へ戻る（Backspace）
                         Rectangle {
                             width: 26px;
                             height: 26px;
@@ -108,7 +150,7 @@ component FilePane inherits Rectangle {
                             }
                         }
 
-                        // 新規フォルダー
+                        // 新規フォルダー（Ctrl+Shift+N）
                         Rectangle {
                             width: 26px;
                             height: 26px;
@@ -127,7 +169,7 @@ component FilePane inherits Rectangle {
                             }
                         }
 
-                        // ゴミ箱へ送る
+                        // ゴミ箱へ送る（Delete）
                         Rectangle {
                             width: 26px;
                             height: 26px;
@@ -144,7 +186,7 @@ component FilePane inherits Rectangle {
                             }
                         }
 
-                        // 再読み込み
+                        // 再読み込み（F5）
                         Rectangle {
                             width: 26px;
                             height: 26px;
@@ -167,7 +209,6 @@ component FilePane inherits Rectangle {
             }
 
             // ★思想5: クイック絞り込みフィルターバー
-            // フォルダ内をキーボード入力でリアルタイムにインクリメンタル絞り込み
             Rectangle {
                 height: 28px;
                 background: #141417;
@@ -188,7 +229,7 @@ component FilePane inherits Rectangle {
 
                     filter_input := LineEdit {
                         text <=> root.filter_text;
-                        placeholder-text: "フォルダ内を絞り込み…";
+                        placeholder-text: "フォルダ内を絞り込み (Ctrl+F)…";
                         edited => { root.filter_changed(self.text); }
                     }
                 }
@@ -332,6 +373,10 @@ export component AppWindow inherits Window {
     in-out property <bool> split_mode: true;
     in-out property <int> active_pane: 0; // 0: 左ペイン, 1: 右ペイン
 
+    // 履歴オーバーレイ状態
+    in-out property <bool> show_history: false;
+    in-out property <[string]> recent_history: [];
+
     // 左ペイン状態
     in-out property <string> left_path: "C:\\";
     in-out property <string> left_tail: "C:\\";
@@ -340,6 +385,8 @@ export component AppWindow inherits Window {
     in-out property <[FileItem]> left_files: [];
     in-out property <int> left_selected: -1;
     in-out property <string> left_filter: "";
+    in-out property <bool> left_can_back: false;
+    in-out property <bool> left_can_forward: false;
 
     // 右ペイン状態
     in-out property <string> right_path: "C:\\";
@@ -349,6 +396,8 @@ export component AppWindow inherits Window {
     in-out property <[FileItem]> right_files: [];
     in-out property <int> right_selected: -1;
     in-out property <string> right_filter: "";
+    in-out property <bool> right_can_back: false;
+    in-out property <bool> right_can_forward: false;
 
     in-out property <string> status_text: "⚡ GPUネイティブ描画エンジン稼働中";
 
@@ -356,8 +405,13 @@ export component AppWindow inherits Window {
     callback drive_selected(string);
     callback toggle_split();
     callback switch_active_pane(int);
+    callback toggle_history();
+    callback select_history_item(string);
+    callback clear_recent_history();
 
     // 左ペイン操作
+    callback left_navigate_back();
+    callback left_navigate_forward();
     callback left_navigate_up();
     callback left_refresh();
     callback left_new_folder();
@@ -367,6 +421,8 @@ export component AppWindow inherits Window {
     callback left_item_double_clicked(int);
 
     // 右ペイン操作
+    callback right_navigate_back();
+    callback right_navigate_forward();
     callback right_navigate_up();
     callback right_refresh();
     callback right_new_folder();
@@ -375,14 +431,14 @@ export component AppWindow inherits Window {
     callback right_item_clicked(int);
     callback right_item_double_clicked(int);
 
-    // キーボード総合ハンドラ
-    callback handle_key(string) -> bool;
+    // キーボード総合ハンドラ (text, ctrl, alt, shift)
+    callback handle_key(string, bool, bool, bool) -> bool;
 
     forward-focus: key_handler;
 
     key_handler := FocusScope {
         key-pressed(event) => {
-            if (root.handle_key(event.text)) {
+            if (root.handle_key(event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift)) {
                 return accept;
             }
             reject
@@ -399,7 +455,7 @@ export component AppWindow inherits Window {
 
                 // ブランドロゴ
                 Rectangle {
-                    width: 150px;
+                    width: 140px;
                     background: #18181b;
                     border-radius: 6px;
                     border-width: 1px;
@@ -423,7 +479,7 @@ export component AppWindow inherits Window {
                     spacing: 4px;
 
                     for drive in root.drives: Rectangle {
-                        width: 48px;
+                        width: 44px;
                         background: drv_touch.has_hover ? #3b82f6 : #1c1c20;
                         border-radius: 5px;
                         border-width: 1px;
@@ -444,11 +500,42 @@ export component AppWindow inherits Window {
                     }
                 }
 
+                // ★履歴ドロップダウンボタン (Ctrl+H)
+                Rectangle {
+                    width: 115px;
+                    background: root.show_history ? #2563eb : (hist_btn_touch.has_hover ? #2e2e38 : #1c1c20);
+                    border-radius: 5px;
+                    border-width: 1px;
+                    border-color: root.show_history ? #3b82f6 : #2e2e36;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        Text {
+                            text: "🕒 履歴";
+                            color: root.show_history ? #ffffff : #e2e8f0;
+                            font-size: 11px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.recent_history.length > 0 ? ("(" + root.recent_history.length + ")") : "";
+                            color: root.show_history ? #bfdbfe : #94a3b8;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    hist_btn_touch := TouchArea {
+                        clicked => { root.toggle_history(); }
+                    }
+                }
+
                 Rectangle { horizontal-stretch: 1; }
 
                 // 2画面分割トグルボタン
                 Rectangle {
-                    width: 120px;
+                    width: 115px;
                     background: split_touch.has_hover ? #2563eb : (root.split_mode ? #1e3a8a : #1c1c20);
                     border-radius: 5px;
                     border-width: 1px;
@@ -472,59 +559,198 @@ export component AppWindow inherits Window {
                 }
             }
 
-            // メインワークスペース（ペインエリア）
-            HorizontalLayout {
+            // メインワークスペース（ペインエリア ＋ 履歴オーバーレイ）
+            Rectangle {
                 vertical-stretch: 1;
-                spacing: 8px;
 
-                // 左ペイン
-                left_pane := FilePane {
-                    horizontal-stretch: 1;
-                    path: root.left_path;
-                    tail_name: root.left_tail;
-                    lead_path: root.left_lead;
-                    hue_color: root.left_hue_color;
-                    files: root.left_files;
-                    selected_index: root.left_selected;
-                    is_active: root.active_pane == 0;
-                    filter_text <=> root.left_filter;
+                HorizontalLayout {
+                    width: 100%;
+                    height: 100%;
+                    spacing: 8px;
 
-                    pane_activated => { root.switch_active_pane(0); }
-                    navigate_up => { root.left_navigate_up(); }
-                    refresh => { root.left_refresh(); }
-                    new_folder => { root.left_new_folder(); }
-                    trash_selected => { root.left_trash_selected(); }
-                    filter_changed(t) => { root.left_filter_changed(t); }
-                    item_clicked(idx) => { root.left_item_clicked(idx); }
-                    item_double_clicked(idx) => { root.left_item_double_clicked(idx); }
+                    // 左ペイン
+                    left_pane := FilePane {
+                        horizontal-stretch: 1;
+                        path: root.left_path;
+                        tail_name: root.left_tail;
+                        lead_path: root.left_lead;
+                        hue_color: root.left_hue_color;
+                        files: root.left_files;
+                        selected_index: root.left_selected;
+                        is_active: root.active_pane == 0;
+                        filter_text <=> root.left_filter;
+                        can_go_back: root.left_can_back;
+                        can_go_forward: root.left_can_forward;
+
+                        pane_activated => { root.switch_active_pane(0); }
+                        navigate_back => { root.left_navigate_back(); }
+                        navigate_forward => { root.left_navigate_forward(); }
+                        navigate_up => { root.left_navigate_up(); }
+                        refresh => { root.left_refresh(); }
+                        new_folder => { root.left_new_folder(); }
+                        trash_selected => { root.left_trash_selected(); }
+                        filter_changed(t) => { root.left_filter_changed(t); }
+                        item_clicked(idx) => { root.left_item_clicked(idx); }
+                        item_double_clicked(idx) => { root.left_item_double_clicked(idx); }
+                    }
+
+                    // 右ペイン（2画面モード時のみ表示）
+                    if root.split_mode: right_pane := FilePane {
+                        horizontal-stretch: 1;
+                        path: root.right_path;
+                        tail_name: root.right_tail;
+                        lead_path: root.right_lead;
+                        hue_color: root.right_hue_color;
+                        files: root.right_files;
+                        selected_index: root.right_selected;
+                        is_active: root.active_pane == 1;
+                        filter_text <=> root.right_filter;
+                        can_go_back: root.right_can_back;
+                        can_go_forward: root.right_can_forward;
+
+                        pane_activated => { root.switch_active_pane(1); }
+                        navigate_back => { root.right_navigate_back(); }
+                        navigate_forward => { root.right_navigate_forward(); }
+                        navigate_up => { root.right_navigate_up(); }
+                        refresh => { root.right_refresh(); }
+                        new_folder => { root.right_new_folder(); }
+                        trash_selected => { root.right_trash_selected(); }
+                        filter_changed(t) => { root.right_filter_changed(t); }
+                        item_clicked(idx) => { root.right_item_clicked(idx); }
+                        item_double_clicked(idx) => { root.right_item_double_clicked(idx); }
+                    }
                 }
 
-                // 右ペイン（2画面モード時のみ表示）
-                if root.split_mode: right_pane := FilePane {
-                    horizontal-stretch: 1;
-                    path: root.right_path;
-                    tail_name: root.right_tail;
-                    lead_path: root.right_lead;
-                    hue_color: root.right_hue_color;
-                    files: root.right_files;
-                    selected_index: root.right_selected;
-                    is_active: root.active_pane == 1;
-                    filter_text <=> root.right_filter;
+                // ★履歴ドロップダウン・ポップアップパネル（show_history が true の時に前面表示）
+                if root.show_history: Rectangle {
+                    x: 150px;
+                    y: 4px;
+                    width: 520px;
+                    height: 320px;
+                    background: #18181e;
+                    border-radius: 8px;
+                    border-width: 1.5px;
+                    border-color: #3b82f6;
+                    clip: true;
 
-                    pane_activated => { root.switch_active_pane(1); }
-                    navigate_up => { root.right_navigate_up(); }
-                    refresh => { root.right_refresh(); }
-                    new_folder => { root.right_new_folder(); }
-                    trash_selected => { root.right_trash_selected(); }
-                    filter_changed(t) => { root.right_filter_changed(t); }
-                    item_clicked(idx) => { root.right_item_clicked(idx); }
-                    item_double_clicked(idx) => { root.right_item_double_clicked(idx); }
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 8px;
+
+                        // 履歴ヘッダー
+                        HorizontalLayout {
+                            height: 26px;
+                            spacing: 8px;
+
+                            Text {
+                                text: "🕒 最近開いたフォルダー (Ctrl+H で閉じる)";
+                                color: #f8fafc;
+                                font-size: 12px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+
+                            // 履歴消去ボタン
+                            Rectangle {
+                                width: 55px;
+                                height: 22px;
+                                background: clr_touch.has_hover ? #ef4444 : #272732;
+                                border-radius: 4px;
+                                Text {
+                                    text: "消去";
+                                    color: #f8fafc;
+                                    font-size: 10px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                clr_touch := TouchArea {
+                                    clicked => { root.clear_recent_history(); }
+                                }
+                            }
+
+                            // 閉じるボタン
+                            Rectangle {
+                                width: 22px;
+                                height: 22px;
+                                background: close_touch.has_hover ? #3b82f6 : #272732;
+                                border-radius: 4px;
+                                Text {
+                                    text: "✕";
+                                    color: #cbd5e1;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                close_touch := TouchArea {
+                                    clicked => { root.toggle_history(); }
+                                }
+                            }
+                        }
+
+                        // 履歴リスト
+                        ScrollView {
+                            vertical-stretch: 1;
+
+                            VerticalLayout {
+                                spacing: 2px;
+                                alignment: start;
+
+                                for item_path in root.recent_history: Rectangle {
+                                    height: 28px;
+                                    border-radius: 4px;
+                                    background: hist_item_touch.has_hover ? #2563eb : #202028;
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        spacing: 8px;
+
+                                        Text {
+                                            text: "📁";
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            text: item_path;
+                                            color: #f1f5f9;
+                                            font-size: 11px;
+                                            font-weight: 500;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+
+                                    hist_item_touch := TouchArea {
+                                        clicked => {
+                                            root.select_history_item(item_path);
+                                        }
+                                    }
+                                }
+
+                                if root.recent_history.length == 0: Rectangle {
+                                    height: 100px;
+                                    Text {
+                                        text: "まだ訪問履歴がありません";
+                                        color: #64748b;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            // ★思想1: キーボード操作ファーストのガイドフッター
+            // ★拡張ショートカットガイドフッター
             Rectangle {
-                height: 24px;
+                height: 26px;
                 background: #121214;
                 border-radius: 4px;
                 border-width: 1px;
@@ -545,9 +771,9 @@ export component AppWindow inherits Window {
 
                     Rectangle { horizontal-stretch: 1; }
 
-                    // キーボードショートカットのガイド表示
+                    // キーボードショートカットの包括的ガイド
                     Text {
-                        text: "↑↓: 移動  ·  Enter: 開く  ·  Backspace: 戻る  ·  Tab: ペイン切替  ·  Delete: ゴミ箱  ·  F5: 更新";
+                        text: "Alt+←/→: 履歴戻る/進む · Ctrl+C/V: コピー/貼付 · Ctrl+Shift+N: 新規 · Ctrl+Shift+C: パスコピー · Ctrl+H: 履歴 · Del: ゴミ箱";
                         color: #64748b;
                         font-size: 10px;
                         vertical-alignment: center;

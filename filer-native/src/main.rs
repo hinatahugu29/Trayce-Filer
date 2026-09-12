@@ -2,8 +2,11 @@
 
 use chrono::{DateTime, Local};
 use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use std::cell::RefCell;
 use std::fs;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::SystemTime;
 
@@ -98,47 +101,47 @@ fn get_icon(is_dir: bool, name: &str) -> &'static str {
 
     match ext.as_str() {
         "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "bmp" => "🖼️",
-        "zip" | "rar" | "7z" | "tar" | "gz" => "📦",
-        "txt" | "md" | "json" | "rs" | "ts" | "js" | "html" | "css" => "📄",
-        "mp3" | "wav" | "flac" | "m4a" => "🎵",
         "mp4" | "mkv" | "avi" | "mov" | "webm" => "🎬",
-        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" => "📑",
+        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" => "🎵",
+        "zip" | "7z" | "rar" | "tar" | "gz" => "📦",
+        "rs" | "ts" | "js" | "py" | "html" | "css" | "json" | "toml" | "svelte" => "💻",
+        "txt" | "md" | "doc" | "docx" | "pdf" => "📄",
         "exe" | "msi" | "bat" | "cmd" | "ps1" => "⚙️",
         _ => "📄",
     }
 }
 
-// ディレクトリ一覧取得
-fn read_directory(path_str: &str, filter: &str) -> (Vec<FileItem>, Result<(), String>) {
-    let path = Path::new(path_str);
-    let mut dirs_list: Vec<FileItem> = Vec::new();
-    let mut files_list: Vec<FileItem> = Vec::new();
+// ディレクトリ読込（リアルタイムフィルタリング対応）
+fn read_directory(path: &str, filter: &str) -> (Vec<FileItem>, Result<(), String>) {
+    let p = Path::new(path);
+    let read_res = fs::read_dir(p);
 
-    let read_res = fs::read_dir(path);
-    if let Err(e) = read_res {
-        return (Vec::new(), Err(e.to_string()));
-    }
+    let entries = match read_res {
+        Ok(e) => e,
+        Err(err) => return (Vec::new(), Err(err.to_string())),
+    };
 
-    let filter_lower = filter.to_lowercase();
+    let filter_lower = filter.trim().to_lowercase();
+    let mut dirs_list = Vec::new();
+    let mut files_list = Vec::new();
 
-    for entry in read_res.unwrap().flatten() {
+    for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
 
-        // フィルター適用
         if !filter_lower.is_empty() && !name.to_lowercase().contains(&filter_lower) {
             continue;
         }
 
-        let meta = entry.metadata().ok();
-        let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+        let metadata = entry.metadata().ok();
+        let is_dir = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+
         let size_str = if is_dir {
             String::new()
         } else {
-            format_size(meta.as_ref().map(|m| m.len()).unwrap_or(0))
+            metadata.as_ref().map(|m| format_size(m.len())).unwrap_or_default()
         };
 
-        let date_str = meta
-            .as_ref()
+        let date_str = metadata
             .and_then(|m| m.modified().ok())
             .map(format_time)
             .unwrap_or_default();
@@ -167,7 +170,7 @@ fn read_directory(path_str: &str, filter: &str) -> (Vec<FileItem>, Result<(), St
     (dirs_list, Ok(()))
 }
 
-// ドライブ検出
+// 利用可能ドライブの検出
 fn detect_drives() -> Vec<SharedString> {
     let mut drives = Vec::new();
     for letter in b'A'..=b'Z' {
@@ -202,6 +205,111 @@ fn trash_item(path: &Path) -> Result<(), String> {
     trash::delete(path).map_err(|e| e.to_string())
 }
 
+// 再帰的ディレクトリコピー
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+// 重複回避されたユニークな貼り付け先パスの生成
+fn unique_destination_path(dir: &Path, original_name: &str) -> PathBuf {
+    let mut dest = dir.join(original_name);
+    if !dest.exists() {
+        return dest;
+    }
+    let p = Path::new(original_name);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(original_name);
+    let ext = p.extension().and_then(|e| e.to_str());
+
+    let mut idx = 1;
+    loop {
+        let candidate_name = if let Some(e) = ext {
+            format!("{} - コピー ({}) .{}", stem, idx, e)
+        } else {
+            format!("{} - コピー ({})", stem, idx)
+        };
+        dest = dir.join(candidate_name);
+        if !dest.exists() {
+            return dest;
+        }
+        idx += 1;
+    }
+}
+
+// OS クリップボードへテキストを設定
+fn set_clipboard_text(text: &str) {
+    if let Ok(mut child) = Command::new("clip").stdin(Stdio::piped()).spawn() {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    }
+}
+
+// 内部クリップボードアイテム
+#[derive(Clone, Debug)]
+struct ClipboardItem {
+    path: PathBuf,
+    is_cut: bool,
+}
+
+// ペイン状態管理（戻る/進む履歴スタック内包）
+struct PaneState {
+    back_stack: Vec<String>,
+    forward_stack: Vec<String>,
+}
+
+impl PaneState {
+    fn new() -> Self {
+        Self {
+            back_stack: Vec::new(),
+            forward_stack: Vec::new(),
+        }
+    }
+
+    fn push_history(&mut self, current_path: &str) {
+        if self.back_stack.last().map(|s| s.as_str()) != Some(current_path) {
+            self.back_stack.push(current_path.to_string());
+        }
+        self.forward_stack.clear();
+    }
+
+    fn can_back(&self) -> bool {
+        !self.back_stack.is_empty()
+    }
+
+    fn can_forward(&self) -> bool {
+        !self.forward_stack.is_empty()
+    }
+
+    fn go_back(&mut self, current_path: &str) -> Option<String> {
+        if let Some(target) = self.back_stack.pop() {
+            self.forward_stack.push(current_path.to_string());
+            Some(target)
+        } else {
+            None
+        }
+    }
+
+    fn go_forward(&mut self, current_path: &str) -> Option<String> {
+        if let Some(target) = self.forward_stack.pop() {
+            self.back_stack.push(current_path.to_string());
+            Some(target)
+        } else {
+            None
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_time = SystemTime::now();
     let app = AppWindow::new()?;
@@ -218,9 +326,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| left_initial.clone());
 
-    // 左ペイン状態の反映ヘルパー
+    // 内部状態
+    let left_state = Rc::new(RefCell::new(PaneState::new()));
+    let right_state = Rc::new(RefCell::new(PaneState::new()));
+    let recent_history: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(vec![
+        left_initial.clone(),
+        right_initial.clone(),
+    ]));
+    let internal_clipboard: Rc<RefCell<Option<ClipboardItem>>> = Rc::new(RefCell::new(None));
+
+    // 最近の履歴を更新するヘルパー
+    let add_to_recent_history = {
+        let app_weak = app.as_weak();
+        let recent_history = recent_history.clone();
+        move |path: &str| {
+            let mut hist = recent_history.borrow_mut();
+            hist.retain(|p| p != path);
+            hist.insert(0, path.to_string());
+            if hist.len() > 30 {
+                hist.truncate(30);
+            }
+            if let Some(app) = app_weak.upgrade() {
+                let items: Vec<SharedString> = hist.iter().map(|s| SharedString::from(s.as_str())).collect();
+                app.set_recent_history(ModelRc::from(Rc::new(VecModel::from(items))));
+            }
+        }
+    };
+
+    // 左ペイン更新ヘルパー
     let update_left_pane = {
         let app_weak = app.as_weak();
+        let left_state = left_state.clone();
         move |path: &str, filter: &str| {
             if let Some(app) = app_weak.upgrade() {
                 let (tail, lead) = split_path(path);
@@ -230,15 +366,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.set_left_lead(SharedString::from(lead));
                 app.set_left_hue_color(hue);
 
+                let state = left_state.borrow();
+                app.set_left_can_back(state.can_back());
+                app.set_left_can_forward(state.can_forward());
+
                 let (items, _) = read_directory(path, filter);
                 app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
             }
         }
     };
 
-    // 右ペイン状態の反映ヘルパー
+    // 右ペイン更新ヘルパー
     let update_right_pane = {
         let app_weak = app.as_weak();
+        let right_state = right_state.clone();
         move |path: &str, filter: &str| {
             if let Some(app) = app_weak.upgrade() {
                 let (tail, lead) = split_path(path);
@@ -248,15 +389,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.set_right_lead(SharedString::from(lead));
                 app.set_right_hue_color(hue);
 
+                let state = right_state.borrow();
+                app.set_right_can_back(state.can_back());
+                app.set_right_can_forward(state.can_forward());
+
                 let (items, _) = read_directory(path, filter);
                 app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
             }
         }
     };
 
-    // 初期表示設定
+    // 初期化実行
     update_left_pane(&left_initial, "");
     update_right_pane(&right_initial, "");
+    {
+        let hist = recent_history.borrow();
+        let items: Vec<SharedString> = hist.iter().map(|s| SharedString::from(s.as_str())).collect();
+        app.set_recent_history(ModelRc::from(Rc::new(VecModel::from(items))));
+    }
 
     let elapsed = start_time.elapsed().unwrap_or_default();
     app.set_status_text(SharedString::from(format!(
@@ -267,26 +417,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ドライブ選択
     {
         let app_weak = app.as_weak();
+        let left_state = left_state.clone();
+        let right_state = right_state.clone();
+        let add_to_recent = add_to_recent_history.clone();
         app.on_drive_selected(move |drive| {
             if let Some(app) = app_weak.upgrade() {
                 let drive_str = drive.to_string();
+                add_to_recent(&drive_str);
                 if app.get_active_pane() == 0 {
+                    let cur = app.get_left_path().to_string();
+                    left_state.borrow_mut().push_history(&cur);
                     let (tail, lead) = split_path(&drive_str);
                     let hue = path_hue_color(&drive_str);
                     app.set_left_path(SharedString::from(&drive_str));
                     app.set_left_tail(SharedString::from(tail));
                     app.set_left_lead(SharedString::from(lead));
                     app.set_left_hue_color(hue);
+                    app.set_left_can_back(left_state.borrow().can_back());
+                    app.set_left_can_forward(left_state.borrow().can_forward());
                     let (items, _) = read_directory(&drive_str, &app.get_left_filter());
                     app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
                     app.set_left_selected(-1);
                 } else {
+                    let cur = app.get_right_path().to_string();
+                    right_state.borrow_mut().push_history(&cur);
                     let (tail, lead) = split_path(&drive_str);
                     let hue = path_hue_color(&drive_str);
                     app.set_right_path(SharedString::from(&drive_str));
                     app.set_right_tail(SharedString::from(tail));
                     app.set_right_lead(SharedString::from(lead));
                     app.set_right_hue_color(hue);
+                    app.set_right_can_back(right_state.borrow().can_back());
+                    app.set_right_can_forward(right_state.borrow().can_forward());
                     let (items, _) = read_directory(&drive_str, &app.get_right_filter());
                     app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
                     app.set_right_selected(-1);
@@ -316,9 +478,130 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // 左ペイン: 上へ戻る
+    // 履歴オーバーレイ開閉
     {
         let app_weak = app.as_weak();
+        app.on_toggle_history(move || {
+            if let Some(app) = app_weak.upgrade() {
+                let cur = app.get_show_history();
+                app.set_show_history(!cur);
+            }
+        });
+    }
+
+    // 履歴アイテム選択
+    {
+        let app_weak = app.as_weak();
+        let left_state = left_state.clone();
+        let right_state = right_state.clone();
+        let add_to_recent = add_to_recent_history.clone();
+        app.on_select_history_item(move |path_item| {
+            if let Some(app) = app_weak.upgrade() {
+                let target_path = path_item.to_string();
+                if Path::new(&target_path).exists() {
+                    add_to_recent(&target_path);
+                    if app.get_active_pane() == 0 {
+                        let cur = app.get_left_path().to_string();
+                        left_state.borrow_mut().push_history(&cur);
+                        let (tail, lead) = split_path(&target_path);
+                        let hue = path_hue_color(&target_path);
+                        app.set_left_path(SharedString::from(&target_path));
+                        app.set_left_tail(SharedString::from(tail));
+                        app.set_left_lead(SharedString::from(lead));
+                        app.set_left_hue_color(hue);
+                        app.set_left_can_back(left_state.borrow().can_back());
+                        app.set_left_can_forward(left_state.borrow().can_forward());
+                        let (items, _) = read_directory(&target_path, "");
+                        app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                        app.set_left_selected(-1);
+                    } else {
+                        let cur = app.get_right_path().to_string();
+                        right_state.borrow_mut().push_history(&cur);
+                        let (tail, lead) = split_path(&target_path);
+                        let hue = path_hue_color(&target_path);
+                        app.set_right_path(SharedString::from(&target_path));
+                        app.set_right_tail(SharedString::from(tail));
+                        app.set_right_lead(SharedString::from(lead));
+                        app.set_right_hue_color(hue);
+                        app.set_right_can_back(right_state.borrow().can_back());
+                        app.set_right_can_forward(right_state.borrow().can_forward());
+                        let (items, _) = read_directory(&target_path, "");
+                        app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                        app.set_right_selected(-1);
+                    }
+                }
+                app.set_show_history(false);
+            }
+        });
+    }
+
+    // 履歴消去
+    {
+        let app_weak = app.as_weak();
+        let recent_history = recent_history.clone();
+        app.on_clear_recent_history(move || {
+            recent_history.borrow_mut().clear();
+            if let Some(app) = app_weak.upgrade() {
+                let empty_items: Vec<SharedString> = Vec::new();
+                app.set_recent_history(ModelRc::from(Rc::new(VecModel::from(empty_items))));
+                app.set_status_text(SharedString::from("履歴を消去しました"));
+            }
+        });
+    }
+
+    // 左ペイン: 戻る
+    {
+        let app_weak = app.as_weak();
+        let left_state = left_state.clone();
+        app.on_left_navigate_back(move || {
+            if let Some(app) = app_weak.upgrade() {
+                let cur = app.get_left_path().to_string();
+                if let Some(target) = left_state.borrow_mut().go_back(&cur) {
+                    let (tail, lead) = split_path(&target);
+                    let hue = path_hue_color(&target);
+                    app.set_left_path(SharedString::from(&target));
+                    app.set_left_tail(SharedString::from(tail));
+                    app.set_left_lead(SharedString::from(lead));
+                    app.set_left_hue_color(hue);
+                    app.set_left_can_back(left_state.borrow().can_back());
+                    app.set_left_can_forward(left_state.borrow().can_forward());
+                    let (items, _) = read_directory(&target, &app.get_left_filter());
+                    app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                    app.set_left_selected(0);
+                }
+            }
+        });
+    }
+
+    // 左ペイン: 進む
+    {
+        let app_weak = app.as_weak();
+        let left_state = left_state.clone();
+        app.on_left_navigate_forward(move || {
+            if let Some(app) = app_weak.upgrade() {
+                let cur = app.get_left_path().to_string();
+                if let Some(target) = left_state.borrow_mut().go_forward(&cur) {
+                    let (tail, lead) = split_path(&target);
+                    let hue = path_hue_color(&target);
+                    app.set_left_path(SharedString::from(&target));
+                    app.set_left_tail(SharedString::from(tail));
+                    app.set_left_lead(SharedString::from(lead));
+                    app.set_left_hue_color(hue);
+                    app.set_left_can_back(left_state.borrow().can_back());
+                    app.set_left_can_forward(left_state.borrow().can_forward());
+                    let (items, _) = read_directory(&target, &app.get_left_filter());
+                    app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                    app.set_left_selected(0);
+                }
+            }
+        });
+    }
+
+    // 左ペイン: 親フォルダへ戻る
+    {
+        let app_weak = app.as_weak();
+        let left_state = left_state.clone();
+        let add_to_recent = add_to_recent_history.clone();
         app.on_left_navigate_up(move || {
             if let Some(app) = app_weak.upgrade() {
                 let cur = app.get_left_path().to_string();
@@ -329,12 +612,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         parent_str
                     };
+                    left_state.borrow_mut().push_history(&cur);
+                    add_to_recent(&final_path);
                     let (tail, lead) = split_path(&final_path);
                     let hue = path_hue_color(&final_path);
                     app.set_left_path(SharedString::from(&final_path));
                     app.set_left_tail(SharedString::from(tail));
                     app.set_left_lead(SharedString::from(lead));
                     app.set_left_hue_color(hue);
+                    app.set_left_can_back(left_state.borrow().can_back());
+                    app.set_left_can_forward(left_state.borrow().can_forward());
                     let (items, _) = read_directory(&final_path, &app.get_left_filter());
                     app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
                     app.set_left_selected(-1);
@@ -416,9 +703,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // 左ペイン: ダブルクリック（フォルダ潜行またはファイル起動）
+    // 左ペイン: ダブルクリック
     {
         let app_weak = app.as_weak();
+        let left_state = left_state.clone();
+        let add_to_recent = add_to_recent_history.clone();
         app.on_left_item_double_clicked(move |idx| {
             if let Some(app) = app_weak.upgrade() {
                 let files = app.get_left_files();
@@ -428,12 +717,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if item.is_dir {
                         let next_str = target.to_string_lossy().to_string();
+                        left_state.borrow_mut().push_history(&cur);
+                        add_to_recent(&next_str);
                         let (tail, lead) = split_path(&next_str);
                         let hue = path_hue_color(&next_str);
                         app.set_left_path(SharedString::from(&next_str));
                         app.set_left_tail(SharedString::from(tail));
                         app.set_left_lead(SharedString::from(lead));
                         app.set_left_hue_color(hue);
+                        app.set_left_can_back(left_state.borrow().can_back());
+                        app.set_left_can_forward(left_state.borrow().can_forward());
                         app.set_left_filter(SharedString::from(""));
                         let (items, _) = read_directory(&next_str, "");
                         app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -448,9 +741,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // 右ペイン: 上へ戻る
+    // 右ペイン: 戻る
     {
         let app_weak = app.as_weak();
+        let right_state = right_state.clone();
+        app.on_right_navigate_back(move || {
+            if let Some(app) = app_weak.upgrade() {
+                let cur = app.get_right_path().to_string();
+                if let Some(target) = right_state.borrow_mut().go_back(&cur) {
+                    let (tail, lead) = split_path(&target);
+                    let hue = path_hue_color(&target);
+                    app.set_right_path(SharedString::from(&target));
+                    app.set_right_tail(SharedString::from(tail));
+                    app.set_right_lead(SharedString::from(lead));
+                    app.set_right_hue_color(hue);
+                    app.set_right_can_back(right_state.borrow().can_back());
+                    app.set_right_can_forward(right_state.borrow().can_forward());
+                    let (items, _) = read_directory(&target, &app.get_right_filter());
+                    app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                    app.set_right_selected(0);
+                }
+            }
+        });
+    }
+
+    // 右ペイン: 進む
+    {
+        let app_weak = app.as_weak();
+        let right_state = right_state.clone();
+        app.on_right_navigate_forward(move || {
+            if let Some(app) = app_weak.upgrade() {
+                let cur = app.get_right_path().to_string();
+                if let Some(target) = right_state.borrow_mut().go_forward(&cur) {
+                    let (tail, lead) = split_path(&target);
+                    let hue = path_hue_color(&target);
+                    app.set_right_path(SharedString::from(&target));
+                    app.set_right_tail(SharedString::from(tail));
+                    app.set_right_lead(SharedString::from(lead));
+                    app.set_right_hue_color(hue);
+                    app.set_right_can_back(right_state.borrow().can_back());
+                    app.set_right_can_forward(right_state.borrow().can_forward());
+                    let (items, _) = read_directory(&target, &app.get_right_filter());
+                    app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                    app.set_right_selected(0);
+                }
+            }
+        });
+    }
+
+    // 右ペイン: 親フォルダへ戻る
+    {
+        let app_weak = app.as_weak();
+        let right_state = right_state.clone();
+        let add_to_recent = add_to_recent_history.clone();
         app.on_right_navigate_up(move || {
             if let Some(app) = app_weak.upgrade() {
                 let cur = app.get_right_path().to_string();
@@ -461,12 +804,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         parent_str
                     };
+                    right_state.borrow_mut().push_history(&cur);
+                    add_to_recent(&final_path);
                     let (tail, lead) = split_path(&final_path);
                     let hue = path_hue_color(&final_path);
                     app.set_right_path(SharedString::from(&final_path));
                     app.set_right_tail(SharedString::from(tail));
                     app.set_right_lead(SharedString::from(lead));
                     app.set_right_hue_color(hue);
+                    app.set_right_can_back(right_state.borrow().can_back());
+                    app.set_right_can_forward(right_state.borrow().can_forward());
                     let (items, _) = read_directory(&final_path, &app.get_right_filter());
                     app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
                     app.set_right_selected(-1);
@@ -551,6 +898,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 右ペイン: ダブルクリック
     {
         let app_weak = app.as_weak();
+        let right_state = right_state.clone();
+        let add_to_recent = add_to_recent_history.clone();
         app.on_right_item_double_clicked(move |idx| {
             if let Some(app) = app_weak.upgrade() {
                 let files = app.get_right_files();
@@ -560,12 +909,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if item.is_dir {
                         let next_str = target.to_string_lossy().to_string();
+                        right_state.borrow_mut().push_history(&cur);
+                        add_to_recent(&next_str);
                         let (tail, lead) = split_path(&next_str);
                         let hue = path_hue_color(&next_str);
                         app.set_right_path(SharedString::from(&next_str));
                         app.set_right_tail(SharedString::from(tail));
                         app.set_right_lead(SharedString::from(lead));
                         app.set_right_hue_color(hue);
+                        app.set_right_can_back(right_state.borrow().can_back());
+                        app.set_right_can_forward(right_state.borrow().can_forward());
                         app.set_right_filter(SharedString::from(""));
                         let (items, _) = read_directory(&next_str, "");
                         app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -580,15 +933,216 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // ★思想1: キーボード総合ハンドラ（マウスを持たずに完結する操作）
+    // ★包括的キーボードショートカット＆ナビゲーション総合ハンドラ
     {
         let app_weak = app.as_weak();
-        app.on_handle_key(move |key_str| {
+        let left_state = left_state.clone();
+        let right_state = right_state.clone();
+        let add_to_recent = add_to_recent_history.clone();
+        let clipboard = internal_clipboard.clone();
+
+        app.on_handle_key(move |key_str, ctrl, alt, shift| -> bool {
             if let Some(app) = app_weak.upgrade() {
                 let is_left = app.get_active_pane() == 0;
                 let key = key_str.as_str();
 
-                // Tab キー: ペイン切り替え (0 ⇄ 1)
+                // 1. Ctrl + H: 履歴オーバーレイ開閉
+                if ctrl && (key == "h" || key == "H") {
+                    let cur = app.get_show_history();
+                    app.set_show_history(!cur);
+                    return true;
+                }
+
+                // 2. Alt + ←: 履歴戻る
+                if alt && (key == "\u{F702}" || key == "Left" || key == "ArrowLeft") {
+                    if is_left {
+                        let cur = app.get_left_path().to_string();
+                        if let Some(target) = left_state.borrow_mut().go_back(&cur) {
+                            let (tail, lead) = split_path(&target);
+                            let hue = path_hue_color(&target);
+                            app.set_left_path(SharedString::from(&target));
+                            app.set_left_tail(SharedString::from(tail));
+                            app.set_left_lead(SharedString::from(lead));
+                            app.set_left_hue_color(hue);
+                            app.set_left_can_back(left_state.borrow().can_back());
+                            app.set_left_can_forward(left_state.borrow().can_forward());
+                            let (items, _) = read_directory(&target, &app.get_left_filter());
+                            app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                            app.set_left_selected(0);
+                        }
+                    } else {
+                        let cur = app.get_right_path().to_string();
+                        if let Some(target) = right_state.borrow_mut().go_back(&cur) {
+                            let (tail, lead) = split_path(&target);
+                            let hue = path_hue_color(&target);
+                            app.set_right_path(SharedString::from(&target));
+                            app.set_right_tail(SharedString::from(tail));
+                            app.set_right_lead(SharedString::from(lead));
+                            app.set_right_hue_color(hue);
+                            app.set_right_can_back(right_state.borrow().can_back());
+                            app.set_right_can_forward(right_state.borrow().can_forward());
+                            let (items, _) = read_directory(&target, &app.get_right_filter());
+                            app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                            app.set_right_selected(0);
+                        }
+                    }
+                    return true;
+                }
+
+                // 3. Alt + →: 履歴進む
+                if alt && (key == "\u{F703}" || key == "Right" || key == "ArrowRight") {
+                    if is_left {
+                        let cur = app.get_left_path().to_string();
+                        if let Some(target) = left_state.borrow_mut().go_forward(&cur) {
+                            let (tail, lead) = split_path(&target);
+                            let hue = path_hue_color(&target);
+                            app.set_left_path(SharedString::from(&target));
+                            app.set_left_tail(SharedString::from(tail));
+                            app.set_left_lead(SharedString::from(lead));
+                            app.set_left_hue_color(hue);
+                            app.set_left_can_back(left_state.borrow().can_back());
+                            app.set_left_can_forward(left_state.borrow().can_forward());
+                            let (items, _) = read_directory(&target, &app.get_left_filter());
+                            app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                            app.set_left_selected(0);
+                        }
+                    } else {
+                        let cur = app.get_right_path().to_string();
+                        if let Some(target) = right_state.borrow_mut().go_forward(&cur) {
+                            let (tail, lead) = split_path(&target);
+                            let hue = path_hue_color(&target);
+                            app.set_right_path(SharedString::from(&target));
+                            app.set_right_tail(SharedString::from(tail));
+                            app.set_right_lead(SharedString::from(lead));
+                            app.set_right_hue_color(hue);
+                            app.set_right_can_back(right_state.borrow().can_back());
+                            app.set_right_can_forward(right_state.borrow().can_forward());
+                            let (items, _) = read_directory(&target, &app.get_right_filter());
+                            app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                            app.set_right_selected(0);
+                        }
+                    }
+                    return true;
+                }
+
+                // 4. Ctrl + Shift + N: 新規フォルダー作成
+                if ctrl && shift && (key == "n" || key == "N") {
+                    let cur = if is_left { app.get_left_path().to_string() } else { app.get_right_path().to_string() };
+                    if let Ok(new_name) = create_new_folder(&cur) {
+                        let filter = if is_left { app.get_left_filter() } else { app.get_right_filter() };
+                        let (items, _) = read_directory(&cur, filter.as_str());
+                        if is_left {
+                            app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                        } else {
+                            app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                        }
+                        app.set_status_text(SharedString::from(format!("フォルダー「{}」を作成しました", new_name)));
+                    }
+                    return true;
+                }
+
+                // 5. Ctrl + Shift + C: フルパスをクリップボードにコピー
+                if ctrl && shift && (key == "c" || key == "C") {
+                    let files = if is_left { app.get_left_files() } else { app.get_right_files() };
+                    let sel = if is_left { app.get_left_selected() } else { app.get_right_selected() };
+                    let cur = if is_left { app.get_left_path().to_string() } else { app.get_right_path().to_string() };
+
+                    let target_path = if sel >= 0 && (sel as usize) < files.row_count() {
+                        if let Some(item) = files.row_data(sel as usize) {
+                            Path::new(&cur).join(item.name.as_str()).to_string_lossy().to_string()
+                        } else {
+                            cur
+                        }
+                    } else {
+                        cur
+                    };
+
+                    set_clipboard_text(&target_path);
+                    app.set_status_text(SharedString::from(format!("フルパスをコピーしました: {}", target_path)));
+                    return true;
+                }
+
+                // 6. Ctrl + C: コピー
+                if ctrl && !shift && (key == "c" || key == "C") {
+                    let files = if is_left { app.get_left_files() } else { app.get_right_files() };
+                    let sel = if is_left { app.get_left_selected() } else { app.get_right_selected() };
+                    let cur = if is_left { app.get_left_path().to_string() } else { app.get_right_path().to_string() };
+
+                    if sel >= 0 && (sel as usize) < files.row_count() {
+                        if let Some(item) = files.row_data(sel as usize) {
+                            let target = Path::new(&cur).join(item.name.as_str());
+                            *clipboard.borrow_mut() = Some(ClipboardItem {
+                                path: target,
+                                is_cut: false,
+                            });
+                            app.set_status_text(SharedString::from(format!("「{}」をコピーしました（Ctrl+V で貼り付け）", item.name)));
+                            return true;
+                        }
+                    }
+                }
+
+                // 7. Ctrl + X: 切り取り
+                if ctrl && (key == "x" || key == "X") {
+                    let files = if is_left { app.get_left_files() } else { app.get_right_files() };
+                    let sel = if is_left { app.get_left_selected() } else { app.get_right_selected() };
+                    let cur = if is_left { app.get_left_path().to_string() } else { app.get_right_path().to_string() };
+
+                    if sel >= 0 && (sel as usize) < files.row_count() {
+                        if let Some(item) = files.row_data(sel as usize) {
+                            let target = Path::new(&cur).join(item.name.as_str());
+                            *clipboard.borrow_mut() = Some(ClipboardItem {
+                                path: target,
+                                is_cut: true,
+                            });
+                            app.set_status_text(SharedString::from(format!("「{}」を切り取りました（Ctrl+V で移動）", item.name)));
+                            return true;
+                        }
+                    }
+                }
+
+                // 8. Ctrl + V: 貼り付け
+                if ctrl && (key == "v" || key == "V") {
+                    let cur_dir = if is_left { app.get_left_path().to_string() } else { app.get_right_path().to_string() };
+                    let cur_path = Path::new(&cur_dir);
+
+                    let clip_item = clipboard.borrow().clone();
+                    if let Some(item) = clip_item {
+                        if item.path.exists() {
+                            let file_name = item.path.file_name().unwrap().to_string_lossy().to_string();
+                            let dest = unique_destination_path(cur_path, &file_name);
+
+                            let res = if item.is_cut {
+                                fs::rename(&item.path, &dest)
+                            } else if item.path.is_dir() {
+                                copy_dir_all(&item.path, &dest)
+                            } else {
+                                fs::copy(&item.path, &dest).map(|_| ())
+                            };
+
+                            match res {
+                                Ok(()) => {
+                                    if item.is_cut {
+                                        *clipboard.borrow_mut() = None;
+                                    }
+                                    let filter = if is_left { app.get_left_filter() } else { app.get_right_filter() };
+                                    let (items, _) = read_directory(&cur_dir, filter.as_str());
+                                    if is_left {
+                                        app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                                    } else {
+                                        app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
+                                    }
+                                    app.set_status_text(SharedString::from(format!("「{}」を貼り付けました", file_name)));
+                                }
+                                Err(e) => {
+                                    app.set_status_text(SharedString::from(format!("貼り付けに失敗しました: {}", e)));
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                }
+
+                // 9. Tab キー: ペイン切り替え (0 ⇄ 1)
                 if key == "\t" || key == "Tab" {
                     app.set_active_pane(if is_left { 1 } else { 0 });
                     return true;
@@ -598,21 +1152,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let count = files.row_count() as i32;
                 let current_sel = if is_left { app.get_left_selected() } else { app.get_right_selected() };
 
-                // ↑ キー: カーソル上移動
+                // 10. ↑ キー: カーソル上移動
                 if key == "\u{F700}" || key == "Up" || key == "ArrowUp" {
                     let new_sel = if current_sel <= 0 { 0 } else { current_sel - 1 };
                     if is_left { app.set_left_selected(new_sel); } else { app.set_right_selected(new_sel); }
                     return true;
                 }
 
-                // ↓ キー: カーソル下移動
+                // 11. ↓ キー: カーソル下移動
                 if key == "\u{F701}" || key == "Down" || key == "ArrowDown" {
                     let new_sel = if current_sel < 0 { 0 } else if current_sel >= count - 1 { count - 1 } else { current_sel + 1 };
                     if is_left { app.set_left_selected(new_sel); } else { app.set_right_selected(new_sel); }
                     return true;
                 }
 
-                // Enter キー: 潜る / 実行
+                // 12. Enter キー: フォルダ潜入 / ファイル実行
                 if key == "\n" || key == "\r" || key == "Return" || key == "Enter" {
                     if current_sel >= 0 && (current_sel as usize) < files.row_count() {
                         if let Some(item) = files.row_data(current_sel as usize) {
@@ -621,22 +1175,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             if item.is_dir {
                                 let next_str = target.to_string_lossy().to_string();
+                                add_to_recent(&next_str);
                                 let (tail, lead) = split_path(&next_str);
                                 let hue = path_hue_color(&next_str);
                                 if is_left {
+                                    left_state.borrow_mut().push_history(&cur_path);
                                     app.set_left_path(SharedString::from(&next_str));
                                     app.set_left_tail(SharedString::from(tail));
                                     app.set_left_lead(SharedString::from(lead));
                                     app.set_left_hue_color(hue);
+                                    app.set_left_can_back(left_state.borrow().can_back());
+                                    app.set_left_can_forward(left_state.borrow().can_forward());
                                     app.set_left_filter(SharedString::from(""));
                                     let (items, _) = read_directory(&next_str, "");
                                     app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
                                     app.set_left_selected(0);
                                 } else {
+                                    right_state.borrow_mut().push_history(&cur_path);
                                     app.set_right_path(SharedString::from(&next_str));
                                     app.set_right_tail(SharedString::from(tail));
                                     app.set_right_lead(SharedString::from(lead));
                                     app.set_right_hue_color(hue);
+                                    app.set_right_can_back(right_state.borrow().can_back());
+                                    app.set_right_can_forward(right_state.borrow().can_forward());
                                     app.set_right_filter(SharedString::from(""));
                                     let (items, _) = read_directory(&next_str, "");
                                     app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
@@ -652,7 +1213,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                // Delete キー: ゴミ箱へ安全削除
+                // 13. Delete キー: ゴミ箱へ送る
                 if key == "\u{7F}" || key == "\u{F728}" || key == "Delete" || key == "Del" {
                     let sel = if is_left { app.get_left_selected() } else { app.get_right_selected() };
                     if sel >= 0 && (sel as usize) < files.row_count() {
@@ -679,7 +1240,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return true;
                 }
 
-                // Backspace キー: 親フォルダへ戻る
+                // 14. Backspace キー: 親フォルダへ戻る
                 if key == "\u{8}" || key == "BackSpace" || key == "Backspace" {
                     let cur_path = if is_left { app.get_left_path().to_string() } else { app.get_right_path().to_string() };
                     if let Some(parent) = Path::new(&cur_path).parent() {
@@ -689,21 +1250,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             parent_str
                         };
+                        add_to_recent(&final_path);
                         let (tail, lead) = split_path(&final_path);
                         let hue = path_hue_color(&final_path);
                         if is_left {
+                            left_state.borrow_mut().push_history(&cur_path);
                             app.set_left_path(SharedString::from(&final_path));
                             app.set_left_tail(SharedString::from(tail));
                             app.set_left_lead(SharedString::from(lead));
                             app.set_left_hue_color(hue);
+                            app.set_left_can_back(left_state.borrow().can_back());
+                            app.set_left_can_forward(left_state.borrow().can_forward());
                             let (items, _) = read_directory(&final_path, &app.get_left_filter());
                             app.set_left_files(ModelRc::from(Rc::new(VecModel::from(items))));
                             app.set_left_selected(0);
                         } else {
+                            right_state.borrow_mut().push_history(&cur_path);
                             app.set_right_path(SharedString::from(&final_path));
                             app.set_right_tail(SharedString::from(tail));
                             app.set_right_lead(SharedString::from(lead));
                             app.set_right_hue_color(hue);
+                            app.set_right_can_back(right_state.borrow().can_back());
+                            app.set_right_can_forward(right_state.borrow().can_forward());
                             let (items, _) = read_directory(&final_path, &app.get_right_filter());
                             app.set_right_files(ModelRc::from(Rc::new(VecModel::from(items))));
                             app.set_right_selected(0);
@@ -712,7 +1280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
-                // F5: 更新
+                // 15. F5: 更新
                 if key == "\u{F708}" || key == "F5" {
                     let cur_path = if is_left { app.get_left_path().to_string() } else { app.get_right_path().to_string() };
                     let filter = if is_left { app.get_left_filter() } else { app.get_right_filter() };
