@@ -23,6 +23,7 @@
   export let onOpenDirectory: (path: string) => void = () => {}
   export let onTrayToggle: (path: string) => void = () => {}
   export let onSplit: (path: string) => void = () => {}
+  export let onSplitSearch: (path: string) => void = () => {}
   export let onClose: () => void = () => {}
   export let onActivate: () => void = () => {}
   export let onHoverChange: (hovered: boolean) => void = () => {}
@@ -277,6 +278,11 @@
         ev.preventDefault()
         onSplit(directoryPath)
         break
+      case 'hoverSplitSearchPane':
+        if (ev.repeat) break
+        ev.preventDefault()
+        onSplitSearch(directoryPath)
+        break
       case 'hoverPreview':
         ev.preventDefault()
         togglePreview()
@@ -309,6 +315,7 @@
       <button type="button" title="選択項目の場所を表示" disabled={selection.length === 0} on:click={revealSelection}>⧉</button>
       <button type="button" title="通常のフォルダペインに戻す" on:click={() => onKindChange('directory')}>▣</button>
       <button type="button" title="このペインを左右に分割" on:click={() => onSplit(directoryPath)}>⫿</button>
+      <button class="search-split" type="button" title="同じ対象の検索ペインを隣に追加 (Shift+N)" on:click={() => onSplitSearch(directoryPath)}>⫿⌕</button>
       {#if closable}<button type="button" title="このペインを閉じる" on:click={onClose}>✕</button>{/if}
     </div>
   </header>
@@ -405,6 +412,7 @@
   button { height: 26px; border: 1px solid #454b50; border-radius: 4px; background: #303438; color: #b8c0c7; cursor: pointer; }
   button:disabled { cursor: default; opacity: 0.45; }
   .actions button { width: 26px; height: 24px; padding: 0; }
+  .actions button.search-split { width: 32px; }
   .actions button.on { border-color: #4c9aff; background: #35506f; color: #fff; }
   .scope-row, .query-row { display: flex; align-items: center; gap: 6px; padding: 7px 10px; }
   .scope-row { border-bottom: 1px solid #292d30; color: #89949c; font-size: 11px; }

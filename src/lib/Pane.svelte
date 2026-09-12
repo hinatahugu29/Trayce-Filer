@@ -33,6 +33,7 @@
   export let onOpenSettings: () => void = () => {}
   export let onNote: (message: string) => void = () => {}
   export let onSplit: (path: string) => void = () => {}
+  export let onSplitSearch: (path: string) => void = () => {}
   export let onClose: () => void = () => {}
   export let onDetach: (path: string) => void = () => {}
   export let onKindChange: (kind: api.PaneKind) => void = () => {}
@@ -558,6 +559,11 @@
         ev.preventDefault()
         onSplit(listing.path)
         break
+      case 'hoverSplitSearchPane':
+        if (ev.repeat || !listing) break
+        ev.preventDefault()
+        onSplitSearch(listing.path)
+        break
       case 'hoverPreview':
         if (ev.repeat) break
         ev.preventDefault()
@@ -704,6 +710,9 @@
       >
       <button type="button" title="このペインを検索ペインにする" on:click={() => onKindChange('search')}>
         ⌕
+      </button>
+      <button class="search-split" type="button" title="この場所を検索するペインを隣に追加 (Shift+N)" on:click={() => listing && onSplitSearch(listing.path)}>
+        ⫿⌕
       </button>
       <button type="button" title="このペインを左右に分割" on:click={() => listing && onSplit(listing.path)}>
         ⫿
@@ -896,6 +905,7 @@
     line-height: 1;
     cursor: pointer;
   }
+  .actions button.search-split { width: 32px; }
   .actions button:hover {
     background: #3a3a3a;
     color: #fff;

@@ -29,6 +29,7 @@ export type ActionId =
   | 'hoverClosePane'
   | 'hoverFavorite'
   | 'hoverSplitPane'
+  | 'hoverSplitSearchPane'
   | 'hoverPreview'
 
 export type ActionDef = {
@@ -66,6 +67,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'hoverClosePane', label: 'ポインター先のペインを閉じる', fallback: 'W', group: '左手操作' },
   { id: 'hoverFavorite', label: 'ポインター先をお気に入り切替', fallback: 'F', group: '左手操作' },
   { id: 'hoverSplitPane', label: 'ポインター先を分割', fallback: 'N', group: '左手操作' },
+  { id: 'hoverSplitSearchPane', label: '検索ペインを隣に追加', fallback: 'Shift+N', group: '左手操作' },
   { id: 'hoverPreview', label: 'ポインター先のプレビュー', fallback: 'Space', group: '左手操作' },
 
   { id: 'settings', label: '設定を開く', fallback: 'Ctrl+,', group: 'その他' },

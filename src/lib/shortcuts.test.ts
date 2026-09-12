@@ -59,6 +59,7 @@ describe('matchAction', () => {
     expect(matchAction(ev({ key: 'c', ctrlKey: true }), {})).toBe('copy')
     expect(matchAction(ev({ key: 'F5' }), {})).toBe('reload')
     expect(matchAction(ev({ key: 'q' }), {})).toBe('hoverParent')
+    expect(matchAction(ev({ key: 'N', shiftKey: true }), {})).toBe('hoverSplitSearchPane')
     expect(matchAction(ev({ key: ' ' }), {})).toBe('hoverPreview')
   })
 

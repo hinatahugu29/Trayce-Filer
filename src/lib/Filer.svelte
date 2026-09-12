@@ -158,11 +158,16 @@
     activeTabId = tabs[(idx + delta + tabs.length) % tabs.length].id
   }
 
-  function splitPane(afterId: number, path: string) {
+  function splitPane(afterId: number, path: string, kind: api.PaneKind = 'directory') {
     const tab = activeTab
     if (!tab) return
     const idx = tab.panes.findIndex((p) => p.id === afterId)
-    const created: PaneState = { id: nextPaneId++, kind: 'directory', path }
+    const created: PaneState = {
+      id: nextPaneId++,
+      kind,
+      path,
+      search: kind === 'search' ? newSearchState(path) : undefined,
+    }
     tab.panes = [...tab.panes.slice(0, idx + 1), created, ...tab.panes.slice(idx + 1)]
     tab.activeId = created.id
     tabs = tabs // ネストした更新を描画に反映させる
@@ -483,6 +488,7 @@
                 syncWindowPath()
               }}
               onSplit={(path) => splitPane(pane.id, path)}
+              onSplitSearch={(path) => splitPane(pane.id, path, 'search')}
               onClose={() => closePane(pane.id)}
               onNote={note}
             />
@@ -519,6 +525,7 @@
               }}
               onNote={note}
               onSplit={(path) => splitPane(pane.id, path)}
+              onSplitSearch={(path) => splitPane(pane.id, path, 'search')}
               onClose={() => closePane(pane.id)}
               onDetach={(path) => detachPane(pane.id, path)}
               onKindChange={(kind) => changePaneKind(pane.id, kind)}
@@ -548,6 +555,7 @@
         {resolveKey('hoverClosePane', settings.shortcuts)} 閉じる ·
         {resolveKey('hoverFavorite', settings.shortcuts)} お気に入り ·
         {resolveKey('hoverSplitPane', settings.shortcuts)} 分割 ·
+        {resolveKey('hoverSplitSearchPane', settings.shortcuts)} 検索分割 ·
         {resolveKey('hoverPreview', settings.shortcuts)} プレビュー
       </span>
     {/if}
