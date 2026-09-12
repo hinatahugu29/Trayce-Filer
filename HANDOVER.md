@@ -101,4 +101,4 @@ The feature is intentionally an evolution rather than a direct copy:
 - `c59745b` — `feat: make hover controls configurable`
 - `4e9e910` — `feat: clarify tray transfer targets`
 - `a5ca2af` — `docs: record shortcut and tray polish`
-- Pending: Phase 8 asynchronous Workbench transfer commit.
+- `6d96ace` — `feat: add async workbench transfers`
