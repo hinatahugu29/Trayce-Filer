@@ -6,7 +6,8 @@ dist/
 dist-ssr/
 
 # Tauri / Cargo build outputs
-src-tauri/target/
+target/
+**/target/
 src-tauri/gen/schemas/
 
 # Editor & OS files

@@ -1,0 +1,418 @@
+import { Button, ScrollView, LineEdit } from "std-widgets.slint";
+
+export struct FileItem {
+    name: string,
+    is_dir: bool,
+    size: string,
+    date: string,
+    icon: string,
+}
+
+// 1つのペイン（ファイル一覧、パスバー、スクロールビュー）
+component FilePane inherits Rectangle {
+    in-out property <string> path: "C:\\";
+    in-out property <[FileItem]> files: [];
+    in-out property <int> selected_index: -1;
+    in-out property <bool> is_active: true;
+
+    callback navigate_up();
+    callback refresh();
+    callback item_clicked(int);
+    callback item_double_clicked(int);
+
+    background: #1a1a1e;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: is_active ? #3b82f6 : #2d2d33;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 6px;
+
+        // パスバー
+        HorizontalLayout {
+            spacing: 6px;
+            height: 32px;
+
+            // 上へボタン
+            Rectangle {
+                width: 32px;
+                background: up_touch.has_hover ? #33333d : #25252b;
+                border-radius: 5px;
+                border-width: 1px;
+                border-color: #383842;
+
+                Text {
+                    text: "↑";
+                    color: #e2e8f0;
+                    font-size: 15px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                up_touch := TouchArea {
+                    clicked => { root.navigate_up(); }
+                }
+            }
+
+            // 現在パス表示
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #141416;
+                border-radius: 5px;
+                border-width: 1px;
+                border-color: #2b2b32;
+
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+
+                    Text {
+                        text: root.path;
+                        color: #93c5fd;
+                        font-size: 12px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            // 更新ボタン
+            Rectangle {
+                width: 32px;
+                background: ref_touch.has_hover ? #33333d : #25252b;
+                border-radius: 5px;
+                border-width: 1px;
+                border-color: #383842;
+
+                Text {
+                    text: "⟳";
+                    color: #e2e8f0;
+                    font-size: 15px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                ref_touch := TouchArea {
+                    clicked => { root.refresh(); }
+                }
+            }
+        }
+
+        // テーブルヘッダー
+        Rectangle {
+            height: 24px;
+            background: #141416;
+            border-radius: 4px;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+
+                Text {
+                    text: "名前";
+                    color: #71717a;
+                    font-size: 11px;
+                    font-weight: 600;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "サイズ";
+                    color: #71717a;
+                    font-size: 11px;
+                    font-weight: 600;
+                    width: 75px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "更新日時";
+                    color: #71717a;
+                    font-size: 11px;
+                    font-weight: 600;
+                    width: 115px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ファイルリスト
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 1px;
+                alignment: start;
+
+                for item[idx] in root.files: Rectangle {
+                    height: 26px;
+                    border-radius: 4px;
+                    background: (root.selected_index == idx) ? #2563eb : (row_touch.has_hover ? #25252c : transparent);
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+
+                        // アイコン
+                        Text {
+                            text: item.icon;
+                            font-size: 13px;
+                            width: 18px;
+                            vertical-alignment: center;
+                        }
+
+                        // 名前
+                        Text {
+                            text: item.name;
+                            color: item.is_dir ? #93c5fd : (root.selected_index == idx ? #ffffff : #e2e8f0);
+                            font-size: 12px;
+                            font-weight: item.is_dir ? 600 : 400;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        // サイズ
+                        Text {
+                            text: item.size;
+                            color: root.selected_index == idx ? #bfdbfe : #71717a;
+                            font-size: 11px;
+                            width: 75px;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+
+                        // 日時
+                        Text {
+                            text: item.date;
+                            color: root.selected_index == idx ? #bfdbfe : #71717a;
+                            font-size: 11px;
+                            width: 115px;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    row_touch := TouchArea {
+                        clicked => {
+                            root.selected_index = idx;
+                            root.item_clicked(idx);
+                        }
+                        double-clicked => {
+                            root.item_double_clicked(idx);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ペインフッター
+        HorizontalLayout {
+            height: 18px;
+            padding-left: 4px;
+            padding-right: 4px;
+
+            Text {
+                text: root.files.length + " 項目";
+                color: #52525b;
+                font-size: 10px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Filer Native — ⚡ GPU-Direct Native Engine (Slint)";
+    min-width: 800px;
+    min-height: 520px;
+    default-font-size: 12px;
+    background: #121214;
+
+    in-out property <[string]> drives: ["C:\\"];
+    in-out property <bool> split_mode: true;
+
+    // 左ペイン状態
+    in-out property <string> left_path: "C:\\";
+    in-out property <[FileItem]> left_files: [];
+    in-out property <int> left_selected: -1;
+
+    // 右ペイン状態
+    in-out property <string> right_path: "C:\\";
+    in-out property <[FileItem]> right_files: [];
+    in-out property <int> right_selected: -1;
+
+    in-out property <string> status_text: "⚡ GPUネイティブ描画エンジン稼働中 (DirectX / Vulkan)";
+
+    // コールバック
+    callback drive_selected(string);
+    callback toggle_split();
+    callback left_navigate_up();
+    callback left_refresh();
+    callback left_item_clicked(int);
+    callback left_item_double_clicked(int);
+    callback right_navigate_up();
+    callback right_refresh();
+    callback right_item_clicked(int);
+    callback right_item_double_clicked(int);
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        // グローバルトップバー
+        HorizontalLayout {
+            height: 34px;
+            spacing: 8px;
+
+            // アプリロゴ・バッジ
+            Rectangle {
+                width: 140px;
+                background: #18181b;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: #27272a;
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 6px;
+                    alignment: center;
+
+                    Text {
+                        text: "⚡ Filer Native";
+                        color: #60a5fa;
+                        font-size: 13px;
+                        font-weight: 800;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // ドライブセレクター
+            HorizontalLayout {
+                spacing: 4px;
+
+                for drive in root.drives: Rectangle {
+                    width: 48px;
+                    background: drv_touch.has_hover ? #3b82f6 : #1f1f23;
+                    border-radius: 5px;
+                    border-width: 1px;
+                    border-color: #33333a;
+
+                    Text {
+                        text: drive;
+                        color: #f1f5f9;
+                        font-size: 12px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    drv_touch := TouchArea {
+                        clicked => { root.drive_selected(drive); }
+                    }
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            // 2画面分割トグルボタン
+            Rectangle {
+                width: 110px;
+                background: split_touch.has_hover ? #2563eb : (root.split_mode ? #1e3a8a : #1f1f24);
+                border-radius: 5px;
+                border-width: 1px;
+                border-color: root.split_mode ? #3b82f6 : #33333a;
+
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 5px;
+                    Text {
+                        text: root.split_mode ? "⛶ 2画面分割中" : "🗖 単一画面";
+                        color: root.split_mode ? #93c5fd : #94a3b8;
+                        font-size: 11px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+
+                split_touch := TouchArea {
+                    clicked => { root.toggle_split(); }
+                }
+            }
+        }
+
+        // メインワークスペース（ペインエリア）
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 8px;
+
+            // 左ペイン
+            left_pane := FilePane {
+                horizontal-stretch: 1;
+                path: root.left_path;
+                files: root.left_files;
+                selected_index: root.left_selected;
+                is_active: true;
+
+                navigate_up => { root.left_navigate_up(); }
+                refresh => { root.left_refresh(); }
+                item_clicked(idx) => { root.left_item_clicked(idx); }
+                item_double_clicked(idx) => { root.left_item_double_clicked(idx); }
+            }
+
+            // 右ペイン（2画面モード時のみ表示）
+            if root.split_mode: right_pane := FilePane {
+                horizontal-stretch: 1;
+                path: root.right_path;
+                files: root.right_files;
+                selected_index: root.right_selected;
+                is_active: false;
+
+                navigate_up => { root.right_navigate_up(); }
+                refresh => { root.right_refresh(); }
+                item_clicked(idx) => { root.right_item_clicked(idx); }
+                item_double_clicked(idx) => { root.right_item_double_clicked(idx); }
+            }
+        }
+
+        // グローバルステータスバー
+        Rectangle {
+            height: 22px;
+            background: #141416;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: #24242a;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+
+                Text {
+                    text: root.status_text;
+                    color: #34d399;
+                    font-size: 11px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Text {
+                    text: "Slint v1.17 · ゼロブラウザ・DirectX/WGPU";
+                    color: #52525b;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
