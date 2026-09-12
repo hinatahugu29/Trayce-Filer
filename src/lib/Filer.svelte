@@ -20,6 +20,7 @@
     /** Directory context is retained even when a future pane role is active. */
     path: string
     search?: api.SavedSearchState
+    sidebar?: api.SavedSidebarState
     ref?: Pane | SearchPane
   }
   /**
@@ -324,6 +325,7 @@
         path: p.ref?.currentPath() || p.path,
         kind: p.kind,
         search: p.search,
+        sidebar: p.sidebar,
       }))
       return { panes, activePaneIndex: activeIdx, trayPaths: t.trayItems }
     })
@@ -356,6 +358,7 @@
             kind: p.kind ?? 'directory',
             path: p.path,
             search: p.search,
+            sidebar: p.sidebar,
           }))
           if (panes.length === 0) {
             panes.push({ id: nextPaneId++, kind: 'directory', path: await api.homeDir() })
@@ -507,6 +510,11 @@
               onTrayToggle={toggleTrayItem}
               onTrayClear={clearTray}
               onTrayRemoveMany={removeTrayItems}
+              sidebarState={pane.sidebar ?? { primary: 'tree' }}
+              onSidebarChange={(sidebar) => {
+                pane.sidebar = sidebar
+                tabs = tabs
+              }}
               onHoverChange={(hovered) => {
                 if (hovered) hoveredPaneId = pane.id
                 else if (hoveredPaneId === pane.id) hoveredPaneId = null

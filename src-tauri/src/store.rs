@@ -105,10 +105,22 @@ pub struct SavedPaneState {
   pub kind: PaneKind,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub search: Option<SavedSearchState>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub sidebar: Option<SavedSidebarState>,
   #[serde(default)]
   pub selected_entry: Option<String>,
   #[serde(default)]
   pub scroll_top: Option<f64>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSidebarState {
+  pub primary: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub secondary: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub split_ratio: Option<f64>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -404,6 +416,24 @@ mod tests {
     assert!(session.tabs[0].tray_paths.is_empty());
     assert_eq!(session.tabs[0].panes[0].kind, PaneKind::Directory);
     assert!(session.tabs[0].panes[0].search.is_none());
+    assert!(session.tabs[0].panes[0].sidebar.is_none());
+  }
+
+  #[test]
+  fn split_sidebar_state_round_trips() {
+    let session: SessionState = serde_json::from_str(
+      r#"{"tabs":[{"panes":[{"path":"C:\\work","sidebar":{"primary":"tree","secondary":"history","splitRatio":0.62}}],"activePaneIndex":0}],"activeTabIndex":0}"#,
+    )
+    .unwrap();
+
+    let sidebar = session.tabs[0].panes[0].sidebar.as_ref().unwrap();
+    assert_eq!(sidebar.primary, "tree");
+    assert_eq!(sidebar.secondary.as_deref(), Some("history"));
+    assert_eq!(sidebar.split_ratio, Some(0.62));
+
+    let encoded = serde_json::to_string(&session).unwrap();
+    assert!(encoded.contains(r#""secondary":"history""#));
+    assert!(encoded.contains(r#""splitRatio":0.62"#));
   }
 
   #[test]

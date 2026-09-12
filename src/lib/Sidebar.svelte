@@ -19,7 +19,17 @@
   export let trayTransferBusy = false
 
   /** どのタブを開くか。ペインごとに独立して覚える。 */
-  export let tab: 'tree' | 'favorites' | 'history' | 'tray' = 'tree'
+  export let tab: api.SidebarTab = 'tree'
+  /** 上下分割時は、狭い領域を通常の4タブで消費しない。 */
+  export let compact = false
+  export let onSplit: () => void = () => {}
+  export let onClose: () => void = () => {}
+  export let onTabChange: () => void = () => {}
+
+  function chooseTab(next: api.SidebarTab) {
+    tab = next
+    onTabChange()
+  }
 
   let favorites: string[] = []
   let favoritesExist: boolean[] = []
@@ -49,36 +59,49 @@
 </script>
 
 <div class="sidebar">
-  <div class="tabs" role="tablist">
+  {#if compact}
+    <div class="compact-head">
+      <select bind:value={tab} aria-label="表示する情報" on:change={onTabChange}>
+        <option value="tree">ツリー</option>
+        <option value="favorites">★ お気に入り</option>
+        <option value="history">履歴</option>
+        <option value="tray">トレイ</option>
+      </select>
+      <button type="button" title="この段を閉じる" aria-label="この段を閉じる" on:click={onClose}>×</button>
+    </div>
+  {:else}
+    <div class="tabs" role="tablist">
     <button
       role="tab"
       type="button"
       aria-selected={tab === 'tree'}
       class:on={tab === 'tree'}
-      on:click={() => (tab = 'tree')}>ツリー</button
+      on:click={() => chooseTab('tree')}>ツリー</button
     >
     <button
       role="tab"
       type="button"
       aria-selected={tab === 'favorites'}
       class:on={tab === 'favorites'}
-      on:click={() => (tab = 'favorites')}>★ {favorites.length || ''}</button
+      on:click={() => chooseTab('favorites')}>★ {favorites.length || ''}</button
     >
     <button
       role="tab"
       type="button"
       aria-selected={tab === 'history'}
       class:on={tab === 'history'}
-      on:click={() => (tab = 'history')}>履歴</button
+      on:click={() => chooseTab('history')}>履歴</button
     >
     <button
       role="tab"
       type="button"
       aria-selected={tab === 'tray'}
       class:on={tab === 'tray'}
-      on:click={() => (tab = 'tray')}>トレイ {trayItems.length || ''}</button
+      on:click={() => chooseTab('tray')}>トレイ {trayItems.length || ''}</button
     >
-  </div>
+      <button class="split" type="button" title="左欄を上下に分割" aria-label="左欄を上下に分割" on:click={onSplit}>↕</button>
+    </div>
+  {/if}
 
   <div class="body">
     {#if tab === 'tree'}
@@ -148,6 +171,12 @@
     color: #fff;
     border-bottom-color: #4c9aff;
   }
+  .tabs button.split { flex: none; width: 24px; color: #aaa; }
+
+  .compact-head { display: flex; flex: none; height: 27px; border-bottom: 1px solid #2c2c2c; }
+  .compact-head select { flex: 1; min-width: 0; border: 0; background: #202020; color: #ddd; padding: 0 6px; font: inherit; font-size: 10.5px; }
+  .compact-head button { width: 26px; border: 0; background: transparent; color: #888; cursor: pointer; }
+  .compact-head button:hover { color: #fff; background: #333; }
 
   .body {
     flex: 1;

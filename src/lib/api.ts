@@ -215,6 +215,12 @@ export const resetSettings = () => invoke<Settings>('reset_settings')
  * Missing `kind` means directory so sessions written by older builds remain valid.
  */
 export type PaneKind = 'directory' | 'search'
+export type SidebarTab = 'tree' | 'favorites' | 'history' | 'tray'
+export type SavedSidebarState = {
+  primary: SidebarTab
+  secondary?: SidebarTab
+  splitRatio?: number
+}
 export type SavedSearchState = {
   scopePaths: string[]
   query: string
@@ -229,6 +235,7 @@ export type SavedPaneState = {
   path: string
   kind?: PaneKind
   search?: SavedSearchState
+  sidebar?: SavedSidebarState
   selectedEntry?: string
   scrollTop?: number
 }

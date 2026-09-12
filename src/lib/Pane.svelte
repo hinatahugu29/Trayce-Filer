@@ -43,6 +43,8 @@
   export let onTrayToggle: (path: string) => void = () => {}
   export let onTrayClear: () => void = () => {}
   export let onTrayRemoveMany: (paths: string[]) => void = () => {}
+  export let sidebarState: api.SavedSidebarState = { primary: 'tree' }
+  export let onSidebarChange: (state: api.SavedSidebarState) => void = () => {}
 
   let listing: Listing | null = null
   let error: string | null = null
@@ -55,6 +57,30 @@
    */
   let showTree = settings.showSidebar
   let treeWidth = 210
+  let sidebarPrimary = sidebarState.primary ?? 'tree'
+  let sidebarSecondary: api.SidebarTab | null = sidebarState.secondary ?? null
+  let sidebarSplitRatio = sidebarState.splitRatio ?? 0.55
+  let sidebarResizing = false
+  let treeSlot: HTMLElement | null = null
+
+  function sidebarChanged() {
+    onSidebarChange({
+      primary: sidebarPrimary,
+      secondary: sidebarSecondary ?? undefined,
+      splitRatio: sidebarSecondary ? sidebarSplitRatio : undefined,
+    })
+  }
+
+  function splitSidebar() {
+    sidebarSecondary = sidebarPrimary === 'history' ? 'favorites' : 'history'
+    sidebarChanged()
+  }
+
+  function closeSidebarSection(which: 'primary' | 'secondary') {
+    if (which === 'primary' && sidebarSecondary) sidebarPrimary = sidebarSecondary
+    sidebarSecondary = null
+    sidebarChanged()
+  }
 
   let sidebar: Sidebar | null = null
   let isFavorite = false
@@ -85,6 +111,11 @@
     }
     if (resizingPreview) {
       previewWidth = Math.min(PREVIEW_MAX, Math.max(PREVIEW_MIN, box.right - ev.clientX))
+    }
+    if (sidebarResizing && treeSlot) {
+      const side = treeSlot.getBoundingClientRect()
+      sidebarSplitRatio = Math.min(0.8, Math.max(0.2, (ev.clientY - side.top) / side.height))
+      sidebarChanged()
     }
   }
 
@@ -649,10 +680,12 @@
   on:pointerup={() => {
     resizing = false
     resizingPreview = false
+    sidebarResizing = false
   }}
   on:pointerleave={() => {
     resizing = false
     resizingPreview = false
+    sidebarResizing = false
     onHoverChange(false)
   }}
 >
@@ -732,9 +765,15 @@
 
   <div class="body">
     {#if showTree}
-      <div class="tree-slot" style="width: {treeWidth}px">
-        <Sidebar
+      <div class="tree-slot" bind:this={treeSlot} style="width: {treeWidth}px">
+        <div class="sidebar-section" style:flex={sidebarSecondary ? `0 0 ${sidebarSplitRatio * 100}%` : '1'}>
+          <Sidebar
           bind:this={sidebar}
+          bind:tab={sidebarPrimary}
+          compact={sidebarSecondary !== null}
+          onSplit={splitSidebar}
+          onClose={() => closeSidebarSection('primary')}
+          onTabChange={sidebarChanged}
           currentPath={listing?.path ?? ''}
           onNavigate={open}
           showHidden={sort.showHidden}
@@ -744,7 +783,28 @@
           {onTrayClear}
           onTrayTransfer={transferTray}
           trayTransferBusy={transferId !== null}
-        />
+          />
+        </div>
+        {#if sidebarSecondary}
+          <div class="sidebar-row-resizer" role="separator" aria-orientation="horizontal" aria-label="左欄の上下比率" on:pointerdown|stopPropagation={() => (sidebarResizing = true)} />
+          <div class="sidebar-section lower">
+            <Sidebar
+              bind:tab={sidebarSecondary}
+              compact
+              onClose={() => closeSidebarSection('secondary')}
+              onTabChange={sidebarChanged}
+              currentPath={listing?.path ?? ''}
+              onNavigate={open}
+              showHidden={sort.showHidden}
+              {trayItems}
+              onTrayRemove={onTrayToggle}
+              {onTrayRemoveMany}
+              {onTrayClear}
+              onTrayTransfer={transferTray}
+              trayTransferBusy={transferId !== null}
+            />
+          </div>
+        {/if}
       </div>
       <!-- 幅の調整つまみ。掴んでいる間だけ pointermove を効かせる。 -->
       <div
@@ -928,10 +988,16 @@
     min-height: 0;
   }
   .tree-slot {
+    display: flex;
+    flex-direction: column;
     flex: none;
     min-width: 0;
     border-right: 1px solid #2c2c2c;
   }
+  .sidebar-section { min-height: 0; }
+  .sidebar-section.lower { flex: 1; }
+  .sidebar-row-resizer { height: 5px; flex: none; margin-top: -2px; margin-bottom: -2px; background: #303030; cursor: row-resize; z-index: 2; }
+  .sidebar-row-resizer:hover { background: #4c9aff; }
 
   .resizer {
     width: 4px;
