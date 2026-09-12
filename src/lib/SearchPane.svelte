@@ -7,7 +7,6 @@
   import FileList from './FileList.svelte'
   import Preview from './Preview.svelte'
   import { splitPath } from './api'
-  import { matchesSearchQuery } from './searchQuery'
   import { matchAction } from './shortcuts'
 
   export let directoryPath: string
@@ -32,7 +31,7 @@
   $: scopes = search.scopePaths.length ? search.scopePaths : [directoryPath]
   $: scope = scopes.join('; ')
   $: scopeLabel = scopes.length > 1 ? `${scopes.length}か所` : splitPath(scopes[0]).tail || scopes[0]
-  let indexedEntries: api.SearchEntry[] = []
+  let results: api.SearchEntry[] = []
   let selection: string[] = []
   let showPreview = search.showPreview ?? settings.showPreview
   let sort: api.SortSpec = {
@@ -55,14 +54,16 @@
   function resultParent(entry: api.Entry): string {
     return splitPath(resultPath(entry)).lead
   }
-  $: results = orderedResults(
-    indexedEntries.filter((entry) => matchesSearchQuery(entry, search.query, search.matchPath))
-  )
   let requestId: string | null = null
+  let filterRequestId = 0
   let running = false
+  let paused = false
   let scanned = 0
+  let matched = 0
+  let truncated = false
   let status = '検索対象を読み込んでいます…'
-  let unlistenBatch: UnlistenFn | null = null
+  let unlistenProgress: UnlistenFn | null = null
+  let unlistenResults: UnlistenFn | null = null
   let unlistenDone: UnlistenFn | null = null
 
   export function currentPath(): string {
@@ -79,6 +80,7 @@
 
   function updateQuery(query: string) {
     onSearchChange({ ...search, query })
+    requestFilter({ query })
   }
 
   function updateScope(scopeText: string) {
@@ -92,6 +94,7 @@
 
   function toggleMatchPath() {
     onSearchChange({ ...search, matchPath: !search.matchPath })
+    requestFilter({ matchPath: !search.matchPath })
   }
 
   function togglePreview() {
@@ -119,13 +122,13 @@
     if (requestId) await api.cancelSearch(requestId).catch(() => {})
     const id = nextRequestId()
     requestId = id
-    indexedEntries = []
+    results = []
     scanned = 0
     running = true
     status = 'ファイルを読み込んでいます…'
     try {
-      // 空の検索語で全項目を一度だけ索引化し、入力中の絞り込みはメモリ上で行う。
-      await api.startSearch(id, roots, '', true)
+      await api.startSearch(id, roots)
+      requestFilter()
     } catch (error) {
       if (requestId !== id) return
       running = false
@@ -139,16 +142,27 @@
     status = '停止しています…'
   }
 
-  function orderedResults(values: api.SearchEntry[]): api.SearchEntry[] {
-    const direction = sort.descending ? -1 : 1
-    return [...values].sort((a, b) => {
-      if (sort.dirsFirst && a.isDir !== b.isDir) return a.isDir ? -1 : 1
-      let compared = 0
-      if (sort.key === 'size') compared = a.size - b.size
-      else if (sort.key === 'modified') compared = a.modified - b.modified
-      else if (sort.key === 'ext') compared = a.ext.localeCompare(b.ext)
-      else compared = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-      return compared * direction || a.path.localeCompare(b.path)
+  async function togglePause() {
+    if (!requestId) return
+    if (paused) await api.resumeSearch(requestId)
+    else await api.pauseSearch(requestId)
+    paused = !paused
+    status = paused ? '一時停止中（検索は使えます）' : '読み込みを再開しています…'
+  }
+
+  function requestFilter(override: Partial<api.SearchFilterOptions> = {}) {
+    if (!requestId) return
+    const id = ++filterRequestId
+    api.filterSearch(requestId, id, {
+      query: search.query,
+      matchPath: search.matchPath,
+      sortKey: sort.key,
+      descending: sort.descending,
+      dirsFirst: sort.dirsFirst,
+      limit: 500,
+      ...override,
+    }).catch((error) => {
+      if (id === filterRequestId) status = String(error)
     })
   }
 
@@ -161,7 +175,7 @@
       sortDescending: sort.descending,
       dirsFirst: sort.dirsFirst,
     })
-    indexedEntries = [...indexedEntries]
+    requestFilter({ sortKey: sort.key, descending: sort.descending })
   }
 
   async function launch(_entry: api.Entry, path: string) {
@@ -198,24 +212,29 @@
   }
 
   onMount(async () => {
-    unlistenBatch = await listen<api.SearchBatchEvent>(api.SEARCH_BATCH, ({ payload }) => {
+    unlistenProgress = await listen<api.SearchProgressEvent>(api.SEARCH_PROGRESS, ({ payload }) => {
       if (payload.id !== requestId) return
-      indexedEntries = [...indexedEntries, ...payload.entries]
-      scanned = payload.scanned
+      scanned = payload.indexed
       status = `${scanned.toLocaleString()}件を読み込み中`
+    })
+    unlistenResults = await listen<api.SearchResultsEvent>(api.SEARCH_RESULTS, ({ payload }) => {
+      if (payload.id !== requestId || payload.requestId !== filterRequestId) return
+      results = payload.entries
+      scanned = payload.indexed
+      matched = payload.matched
+      truncated = payload.truncated
     })
     unlistenDone = await listen<api.SearchDoneEvent>(api.SEARCH_DONE, ({ payload }) => {
       if (payload.id !== requestId) return
       running = false
-      scanned = payload.scanned
+      scanned = payload.indexed
       if (payload.error) {
         status = payload.error
       } else if (payload.cancelled) {
-        status = `停止しました — ${indexedEntries.length.toLocaleString()}件を読み込み済み`
+        status = `停止しました — ${payload.indexed.toLocaleString()}件を読み込み済み`
       } else {
         const warning = payload.warningCount ? `・読めない場所 ${payload.warningCount}件` : ''
-        const limited = payload.truncated ? '・上限に達しました' : ''
-        status = `${payload.scanned.toLocaleString()}件を読み込み済み${warning}${limited}`
+        status = `${payload.indexed.toLocaleString()}件を読み込み済み${warning}`
       }
     })
     // ペインへ切り替えた時点で走査を開始する。検索語は開始条件にしない。
@@ -224,7 +243,8 @@
 
   onDestroy(() => {
     if (requestId) api.cancelSearch(requestId).catch(() => {})
-    unlistenBatch?.()
+    unlistenProgress?.()
+    unlistenResults?.()
     unlistenDone?.()
   })
 
@@ -312,6 +332,7 @@
     />
     <button type="button" class:on={search.matchPath} title="ファイル名だけでなくフォルダのパスも検索" on:click={toggleMatchPath}>パス</button>
     {#if running}
+      <button type="button" class:on={paused} on:click={togglePause}>{paused ? '再開' : '一時停止'}</button>
       <button type="button" class="stop" on:click={stopSearch}>停止</button>
     {:else}
       <button type="button" disabled={!scope.trim()} title="検索対象をもう一度読み込む" on:click={() => runIndex()}>再読込</button>
@@ -334,7 +355,9 @@
 
   <div class="syntax"><span>空白: AND</span><span>|: OR</span><span>! または -: 除外</span></div>
 
-  <div class="status" class:searching={running}>{status} · {results.length.toLocaleString()}件表示</div>
+  <div class="status" class:searching={running}>
+    {status} · {results.length.toLocaleString()}件表示{#if truncated} / 一致 {matched.toLocaleString()}件{/if}
+  </div>
   {#if results.length === 0}
     <div class="empty">
       <span class="mark">⌕</span>

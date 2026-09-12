@@ -154,21 +154,39 @@ export type SearchEntry = {
   modified: number
   ext: string
 }
-export type SearchBatchEvent = { id: string; entries: SearchEntry[]; scanned: number }
+export type SearchProgressEvent = { id: string; indexed: number; paused: boolean }
+export type SearchResultsEvent = {
+  id: string
+  requestId: number
+  entries: SearchEntry[]
+  matched: number
+  indexed: number
+  truncated: boolean
+}
 export type SearchDoneEvent = {
   id: string
-  matched: number
-  scanned: number
+  indexed: number
   cancelled: boolean
-  truncated: boolean
   warningCount: number
   error: string | null
 }
-export const SEARCH_BATCH = 'search-batch'
+export type SearchFilterOptions = {
+  query: string
+  matchPath: boolean
+  sortKey: SortKey | 'path'
+  descending: boolean
+  dirsFirst: boolean
+  limit?: number
+}
+export const SEARCH_PROGRESS = 'search-progress'
+export const SEARCH_RESULTS = 'search-results'
 export const SEARCH_DONE = 'search-done'
-export const startSearch = (id: string, roots: string[], query: string, matchPath: boolean) =>
-  invoke<void>('start_search', { id, roots, query, matchPath })
+export const startSearch = (id: string, roots: string[]) => invoke<void>('start_search', { id, roots })
+export const filterSearch = (id: string, requestId: number, options: SearchFilterOptions) =>
+  invoke<void>('filter_search', { id, requestId, options })
 export const cancelSearch = (id: string) => invoke<void>('cancel_search', { id })
+export const pauseSearch = (id: string) => invoke<void>('pause_search', { id })
+export const resumeSearch = (id: string) => invoke<void>('resume_search', { id })
 
 /** 選択を1つの ZIP にまとめる。戻り値は作られた ZIP のパス。 */
 export const compressToZip = (paths: string[]) => invoke<string>('compress_to_zip', { paths })
