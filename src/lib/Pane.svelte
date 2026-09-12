@@ -35,6 +35,7 @@
   export let onSplit: (path: string) => void = () => {}
   export let onClose: () => void = () => {}
   export let onDetach: (path: string) => void = () => {}
+  export let onKindChange: (kind: api.PaneKind) => void = () => {}
   export let onActivate: () => void = () => {}
   export let onHoverChange: (hovered: boolean) => void = () => {}
   export let trayItems: string[] = []
@@ -701,6 +702,9 @@
         class:on={sort.showHidden}
         on:click={toggleHidden}>◌</button
       >
+      <button type="button" title="このペインを検索ペインにする" on:click={() => onKindChange('search')}>
+        ⌕
+      </button>
       <button type="button" title="このペインを左右に分割" on:click={() => listing && onSplit(listing.path)}>
         ⫿
       </button>

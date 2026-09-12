@@ -4,6 +4,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
   import Pane from './Pane.svelte'
+  import SearchPane from './SearchPane.svelte'
   import SettingsDialog from './SettingsDialog.svelte'
   import * as api from './api'
   import { splitPath } from './api'
@@ -19,7 +20,7 @@
     /** Directory context is retained even when a future pane role is active. */
     path: string
     search?: api.SavedSearchState
-    ref?: Pane
+    ref?: Pane | SearchPane
   }
   /**
    * タブ = 横並びペインの集合。
@@ -152,6 +153,28 @@
     tab.panes = [...tab.panes.slice(0, idx + 1), created, ...tab.panes.slice(idx + 1)]
     tab.activeId = created.id
     tabs = tabs // ネストした更新を描画に反映させる
+  }
+
+  function changePaneKind(id: number, kind: api.PaneKind) {
+    const tab = activeTab
+    const pane = tab?.panes.find((candidate) => candidate.id === id)
+    if (!tab || !pane || pane.kind === kind) return
+
+    const directoryPath = pane.ref?.currentPath() || pane.path
+    pane.path = directoryPath
+    pane.kind = kind
+    if (kind === 'search' && !pane.search) {
+      pane.search = { scopePaths: [directoryPath], query: '', matchPath: true }
+    }
+    tabs = tabs
+    syncWindowPath()
+  }
+
+  function updatePaneSearch(id: number, search: api.SavedSearchState) {
+    const pane = activeTab?.panes.find((candidate) => candidate.id === id)
+    if (!pane) return
+    pane.search = search
+    tabs = tabs
   }
 
   function toggleTrayItem(path: string) {
@@ -412,41 +435,69 @@
           <div class="divider" />
         {/if}
         <div class="slot" data-pane-id={pane.id}>
-          <Pane
-            bind:this={pane.ref}
-            initialPath={pane.path}
-            {settings}
-            onOpenSettings={() => (settingsOpen = true)}
-            {dragIcon}
-            active={pane.id === activeTab.activeId}
-            keyboardTarget={pane.id === (hoveredPaneId ?? activeTab.activeId)}
-            multi={activeTab.panes.length > 1}
-            closable={activeTab.panes.length > 1}
-            trayItems={activeTab.trayItems}
-            onTrayToggle={toggleTrayItem}
-            onTrayClear={clearTray}
-            onTrayRemoveMany={removeTrayItems}
-            onHoverChange={(hovered) => {
-              if (hovered) hoveredPaneId = pane.id
-              else if (hoveredPaneId === pane.id) hoveredPaneId = null
-            }}
-            onActivate={() => {
-              activeTab.activeId = pane.id
-              tabs = tabs
-              syncWindowPath()
-            }}
-            onPathChange={(path) => {
-              // タブラベルは末尾フォルダ名を出すので、移動のたびに更新しないと
-              // 「hinat」のまま固まって見える（実際のパスバーとタブ名が食い違う）。
-              pane.path = path
-              tabs = tabs
-              syncWindowPath()
-            }}
-            onNote={note}
-            onSplit={(path) => splitPane(pane.id, path)}
-            onClose={() => closePane(pane.id)}
-            onDetach={(path) => detachPane(pane.id, path)}
-          />
+          {#if pane.kind === 'search'}
+            <SearchPane
+              bind:this={pane.ref}
+              directoryPath={pane.path}
+              search={pane.search ?? { scopePaths: [pane.path], query: '', matchPath: true }}
+              {settings}
+              active={pane.id === activeTab.activeId}
+              keyboardTarget={pane.id === (hoveredPaneId ?? activeTab.activeId)}
+              multi={activeTab.panes.length > 1}
+              closable={activeTab.panes.length > 1}
+              onSearchChange={(search) => updatePaneSearch(pane.id, search)}
+              onKindChange={(kind) => changePaneKind(pane.id, kind)}
+              onHoverChange={(hovered) => {
+                if (hovered) hoveredPaneId = pane.id
+                else if (hoveredPaneId === pane.id) hoveredPaneId = null
+              }}
+              onActivate={() => {
+                activeTab.activeId = pane.id
+                tabs = tabs
+                syncWindowPath()
+              }}
+              onSplit={(path) => splitPane(pane.id, path)}
+              onClose={() => closePane(pane.id)}
+              onNote={note}
+            />
+          {:else}
+            <Pane
+              bind:this={pane.ref}
+              initialPath={pane.path}
+              {settings}
+              onOpenSettings={() => (settingsOpen = true)}
+              {dragIcon}
+              active={pane.id === activeTab.activeId}
+              keyboardTarget={pane.id === (hoveredPaneId ?? activeTab.activeId)}
+              multi={activeTab.panes.length > 1}
+              closable={activeTab.panes.length > 1}
+              trayItems={activeTab.trayItems}
+              onTrayToggle={toggleTrayItem}
+              onTrayClear={clearTray}
+              onTrayRemoveMany={removeTrayItems}
+              onHoverChange={(hovered) => {
+                if (hovered) hoveredPaneId = pane.id
+                else if (hoveredPaneId === pane.id) hoveredPaneId = null
+              }}
+              onActivate={() => {
+                activeTab.activeId = pane.id
+                tabs = tabs
+                syncWindowPath()
+              }}
+              onPathChange={(path) => {
+                // タブラベルは末尾フォルダ名を出すので、移動のたびに更新しないと
+                // 「hinat」のまま固まって見える（実際のパスバーとタブ名が食い違う）。
+                pane.path = path
+                tabs = tabs
+                syncWindowPath()
+              }}
+              onNote={note}
+              onSplit={(path) => splitPane(pane.id, path)}
+              onClose={() => closePane(pane.id)}
+              onDetach={(path) => detachPane(pane.id, path)}
+              onKindChange={(kind) => changePaneKind(pane.id, kind)}
+            />
+          {/if}
         </div>
       {/each}
     {/if}
