@@ -12,6 +12,11 @@ The feature is intentionally an evolution rather than a direct copy:
 - The workbench can send the tray to another Filer window.
 - Existing selection, drag/drop, shortcuts, and Space quick preview must keep working.
 
+The next direction is to make panes role-switchable rather than treating every pane as a
+directory browser. The first additional role is a persistent search pane: one side can
+show an ordinary destination folder while another side keeps cross-directory search
+results available as normal copy/move/preview/tray sources.
+
 ## Working rules
 
 - Keep the Slint implementation untouched.
@@ -31,6 +36,12 @@ The feature is intentionally an evolution rather than a direct copy:
 - [x] Phase 7 — clarify tray destination and add selected-only removal
 - [x] Phase 8 — asynchronous Workbench transfer with progress, cancellation, and race-safe completion
 - [x] Lifecycle fix — exit the process when the last normal Filer window closes
+- [ ] Phase 9 — introduce a backward-compatible pane-kind model (`directory` / `search`)
+- [ ] Phase 10 — add a search-pane shell and role-switching UI without changing directory-pane behavior
+- [ ] Phase 11 — implement cancellable, streaming filename search with explicit scope
+- [ ] Phase 12 — share selection, preview, tray, drag, copy, and move behavior with search results
+- [ ] Phase 13 — persist and restore search scope, query, options, and result presentation
+- [ ] Phase 14 — bring over advanced query/sort/history behavior from `File_Search_APP` selectively
 
 ## Current status
 
@@ -54,6 +65,8 @@ The feature is intentionally an evolution rather than a direct copy:
 - Lifecycle fix implemented: the hidden overlay no longer keeps `app.exe` alive after the last normal Filer window closes. Closing one of several Filer windows still leaves the process running.
 - Phase 8 implemented: Workbench drops use the shared background transfer/undo engine, render progress on the destination card and bottom bar, allow cancellation, and block overlapping drops.
 - Completion handling removes only actually moved tray sources, refreshes both sides, distinguishes success/cancel/error, and buffers events that can arrive before the start call returns.
+- Reviewed `E:\CODE\Antigravity\File_Search_APP` as the reference search implementation. Its useful seams are the query parser, parallel scanner/search worker, incremental result delivery, cancellation/pause behavior, and native multi-path drag support.
+- Chosen direction: search is a pane role, not a temporary palette. A search pane remains beside ordinary directory panes and acts as a first-class source for existing file operations.
 
 ## Key integration points
 
@@ -64,6 +77,46 @@ The feature is intentionally an evolution rather than a direct copy:
 - `src/lib/Workbench.svelte`: existing single-item card-to-card transfer.
 - `src/lib/api.ts`, `src-tauri/src/store.rs`: persisted session types.
 - `src-tauri/src/transfer.rs`, `src-tauri/src/undo.rs`: progress/cancel/undo pipeline to reuse.
+- `E:\CODE\Antigravity\File_Search_APP\src\query.rs`: reference semantics for AND/OR/NOT queries.
+- `E:\CODE\Antigravity\File_Search_APP\src\scanner.rs`, `search_worker.rs`: reference architecture for incremental background search; adapt concepts instead of coupling the two executables.
+
+## Search pane plan
+
+### Product model
+
+- Every pane owns a discriminated role. Phase 9 starts with `directory` and `search`; the model must allow later roles such as tray, recent files, or comparison without another state rewrite.
+- Converting a directory pane to search uses its current folder as the initial scope. Converting back returns to the last browsed directory rather than guessing from a result.
+- Search results are virtual listings, but every row retains its real absolute path. File actions therefore continue to operate on real sources through the existing transfer and undo paths.
+- Pane role belongs to the saved tab session. Runtime-only results do not need to be serialized; saved search conditions rerun on restore.
+
+### Interaction model
+
+- Add a compact role switch in the pane header/menu. Splitting still creates another directory pane first; the user can then change either pane's role.
+- Search pane header contains scope, query, running state, and a compact options affordance. Results occupy the existing main list area rather than introducing a separate modal.
+- Default scope is the directory from which the pane was converted. Later scope choices are current folder, drive, and multiple selected roots.
+- Selecting, multi-selecting, previewing, adding to tray, opening, revealing, and dragging results should feel identical to directory rows.
+- Dropping search results on a directory pane means copy/move as today. Dropping them on the tray means collect only. A search pane is not initially a transfer destination.
+- Hover-target left-hand shortcuts continue to target the pane under the pointer. Parent navigation is directory-only; search gets a dedicated focus/start-stop action only after real-device use establishes the best key.
+
+### Architecture
+
+- Keep `Filer.svelte` responsible for tab/pane identity and persisted role state.
+- Split the current monolithic `Pane.svelte` gradually: retain it as the directory role initially, add `SearchPane.svelte`, and extract only proven shared row operations instead of performing a large rewrite upfront.
+- Define a common pane-facing capability surface for current path/context, focus, reload, selected paths, drop acceptance, and keyboard actions. Unsupported actions must be explicit no-ops or disabled UI, not role checks scattered through `Filer.svelte`.
+- Implement search in Rust as its own background job registry with request IDs, cancellation, incremental result events, and stale-event rejection. Do not run a full recursive scan on the WebView thread.
+- Reuse the existing `Entry` shape where it remains truthful; extend it with an absolute/source path when virtual results require it. Avoid fabricating a single parent path for mixed search results.
+- Borrow behavior from `File_Search_APP`, but do not make Filer launch or depend on that executable. Code can be adapted into Filer's Rust backend once its boundaries and tests are understood.
+
+### Delivery slices and acceptance checks
+
+1. **State foundation:** old sessions restore as directory panes; new role state round-trips; all current tests and behavior remain unchanged.
+2. **Visible shell:** a pane can switch directory → search → directory and preserve its last directory. Empty and not-yet-searched states are clear.
+3. **Search MVP:** one root, filename/path matching, incremental results, cancel/restart, stale searches never overwrite newer queries.
+4. **Operational parity:** open/reveal, selection, preview, tray toggle, and drag from results work; copy/move uses existing progress, cancellation, collision, and undo behavior.
+5. **Session and polish:** search conditions restore and rerun safely; status shows scanning/result counts; narrow split layouts remain usable.
+6. **Advanced search:** AND/OR/NOT, normalization, multiple roots, date/name/path sort, history/favorites, pause/resume—added only after the MVP is exercised on the real machine.
+
+Each slice gets its own implementation commit followed by verification and a handover update. Minimum verification remains Svelte diagnostics, frontend tests, Rust tests, production web build, and `git diff --check`; search worker logic also needs cancellation, stale-result, query, and session-compatibility tests.
 
 ## Decisions still to validate during implementation
 
@@ -85,6 +138,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - 2026-09-12: Completed Phase 7 destination clarity and selected-only tray removal. Full verification passed.
 - 2026-09-12: Fixed application shutdown semantics after real-device testing revealed that the hidden reusable overlay kept the release executable locked.
 - 2026-09-12: Completed Phase 8 asynchronous Workbench transfers with progress, cancellation, overlap prevention, race-safe completion, and actual-result tray updates. Full verification passed.
+- 2026-09-12: Planned the next track as role-switchable panes, beginning with a persistent search pane informed by `File_Search_APP`. No search implementation has started yet.
 
 ## Commit log
 
@@ -102,3 +156,4 @@ The feature is intentionally an evolution rather than a direct copy:
 - `4e9e910` — `feat: clarify tray transfer targets`
 - `a5ca2af` — `docs: record shortcut and tray polish`
 - `6d96ace` — `feat: add async workbench transfers`
+- `91174a9` — `docs: record async transfer milestone`
