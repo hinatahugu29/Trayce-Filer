@@ -51,6 +51,18 @@
   let settings: api.Settings | null = null
   let settingsOpen = false
 
+  function newSearchState(path: string): api.SavedSearchState {
+    return {
+      scopePaths: [path],
+      query: '',
+      matchPath: true,
+      sortKey: settings?.sortKey ?? 'name',
+      sortDescending: settings?.sortDescending ?? false,
+      dirsFirst: settings?.dirsFirst ?? true,
+      showPreview: settings?.showPreview ?? false,
+    }
+  }
+
   $: activeTab = tabs.find((t) => t.id === activeTabId)
   $: if (ready && activeTab) api.setWindowTray(label, activeTab.trayItems).catch(() => {})
 
@@ -164,7 +176,7 @@
     pane.path = directoryPath
     pane.kind = kind
     if (kind === 'search' && !pane.search) {
-      pane.search = { scopePaths: [directoryPath], query: '', matchPath: true }
+      pane.search = newSearchState(directoryPath)
     }
     tabs = tabs
     syncWindowPath()
@@ -448,7 +460,7 @@
             <SearchPane
               bind:this={pane.ref}
               directoryPath={pane.path}
-              search={pane.search ?? { scopePaths: [pane.path], query: '', matchPath: true }}
+              search={pane.search ?? newSearchState(pane.path)}
               {settings}
               {dragIcon}
               trayItems={activeTab.trayItems}

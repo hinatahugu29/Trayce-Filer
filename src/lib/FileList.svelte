@@ -519,4 +519,13 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  /* 検索元と作業先を並べた狭い幅では、重要度の低い列から畳む。 */
+  @container (max-width: 520px) {
+    .c-time { display: none; }
+  }
+  @container (max-width: 380px) {
+    .c-ext { display: none; }
+    .c-size { width: 58px; }
+  }
 </style>

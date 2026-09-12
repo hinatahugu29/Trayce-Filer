@@ -32,8 +32,13 @@
   $: scopeLabel = splitPath(scope).tail || scope
   let results: api.SearchEntry[] = []
   let selection: string[] = []
-  let showPreview = settings.showPreview
-  let sort: api.SortSpec = { key: 'name', descending: false, dirsFirst: true, showHidden: true }
+  let showPreview = search.showPreview ?? settings.showPreview
+  let sort: api.SortSpec = {
+    key: search.sortKey ?? settings.sortKey,
+    descending: search.sortDescending ?? settings.sortDescending,
+    dirsFirst: search.dirsFirst ?? settings.dirsFirst,
+    showHidden: true,
+  }
   type SearchListEntry = api.Entry & { path: string }
   $: listEntries = results.map((entry) => ({
     ...entry,
@@ -73,6 +78,15 @@
 
   function updateScope(scopePath: string) {
     onSearchChange({ ...search, scopePaths: [scopePath] })
+  }
+
+  function toggleMatchPath() {
+    onSearchChange({ ...search, matchPath: !search.matchPath })
+  }
+
+  function togglePreview() {
+    showPreview = !showPreview
+    onSearchChange({ ...search, showPreview })
   }
 
   function nextRequestId(): string {
@@ -124,6 +138,12 @@
   function sortResults(key: api.SortKey) {
     if (sort.key === key) sort = { ...sort, descending: !sort.descending }
     else sort = { ...sort, key, descending: false }
+    onSearchChange({
+      ...search,
+      sortKey: sort.key,
+      sortDescending: sort.descending,
+      dirsFirst: sort.dirsFirst,
+    })
     results = orderedResults(results)
   }
 
@@ -181,6 +201,8 @@
         status = `${payload.matched.toLocaleString()}件・${payload.scanned.toLocaleString()}件を確認${warning}${limited}`
       }
     })
+    // 保存するのは条件だけ。復元時はリスナー準備後に新しい結果を作り直す。
+    if (search.query.trim() && search.scopePaths.some((path) => path.trim())) await runSearch()
   })
 
   onDestroy(() => {
@@ -220,7 +242,7 @@
         break
       case 'hoverPreview':
         ev.preventDefault()
-        showPreview = !showPreview
+        togglePreview()
         break
       default:
         break
@@ -245,7 +267,7 @@
       <span class="scope" title={scope}>対象: {scopeLabel}</span>
     </div>
     <div class="actions">
-      <button type="button" title={showPreview ? 'プレビューを隠す' : 'プレビューを出す'} class:on={showPreview} on:click={() => (showPreview = !showPreview)}>◐</button>
+      <button type="button" title={showPreview ? 'プレビューを隠す' : 'プレビューを出す'} class:on={showPreview} on:click={togglePreview}>◐</button>
       <button type="button" title="選択項目をトレイへ追加・解除" disabled={selection.length === 0} on:click={() => selection.forEach(onTrayToggle)}>◈</button>
       <button type="button" title="選択項目の場所を表示" disabled={selection.length === 0} on:click={revealSelection}>⧉</button>
       <button type="button" title="通常のフォルダペインに戻す" on:click={() => onKindChange('directory')}>▣</button>
@@ -270,6 +292,7 @@
         if (event.key === 'Escape' && running) stopSearch()
       }}
     />
+    <button type="button" class:on={search.matchPath} title="ファイル名だけでなくフォルダのパスも検索" on:click={toggleMatchPath}>パス</button>
     {#if running}
       <button type="button" class="stop" on:click={stopSearch}>停止</button>
     {:else}
@@ -341,6 +364,6 @@
   .empty p { margin: 8px 0 3px; }
   .empty small { color: #68727a; }
   .result-area { display: flex; flex: 1; min-height: 0; }
-  .list-slot { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+  .list-slot { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; container-type: inline-size; }
   .preview-slot { width: 260px; min-width: 160px; border-left: 1px solid #2c2c2c; }
 </style>

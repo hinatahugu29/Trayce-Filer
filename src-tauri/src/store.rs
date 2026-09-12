@@ -69,12 +69,30 @@ pub enum PaneKind {
   Search,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SavedSearchState {
   pub scope_paths: Vec<String>,
   pub query: String,
   pub match_path: bool,
+  pub sort_key: String,
+  pub sort_descending: bool,
+  pub dirs_first: bool,
+  pub show_preview: Option<bool>,
+}
+
+impl Default for SavedSearchState {
+  fn default() -> Self {
+    Self {
+      scope_paths: Vec::new(),
+      query: String::new(),
+      match_path: true,
+      sort_key: "name".into(),
+      sort_descending: false,
+      dirs_first: true,
+      show_preview: None,
+    }
+  }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -389,7 +407,7 @@ mod tests {
   #[test]
   fn search_pane_state_round_trips_without_results() {
     let session: SessionState = serde_json::from_str(
-      r#"{"tabs":[{"panes":[{"path":"C:\\work","kind":"search","search":{"scopePaths":["C:\\work","D:\\assets"],"query":"blue icon","matchPath":true}}],"activePaneIndex":0}],"activeTabIndex":0}"#,
+      r#"{"tabs":[{"panes":[{"path":"C:\\work","kind":"search","search":{"scopePaths":["C:\\work","D:\\assets"],"query":"blue icon","matchPath":true,"sortKey":"modified","sortDescending":true,"dirsFirst":false,"showPreview":true}}],"activePaneIndex":0}],"activeTabIndex":0}"#,
     )
     .unwrap();
 
@@ -399,10 +417,26 @@ mod tests {
     assert_eq!(search.scope_paths, vec![r"C:\work", r"D:\assets"]);
     assert_eq!(search.query, "blue icon");
     assert!(search.match_path);
+    assert_eq!(search.sort_key, "modified");
+    assert!(search.sort_descending);
+    assert!(!search.dirs_first);
+    assert_eq!(search.show_preview, Some(true));
 
     let encoded = serde_json::to_string(&session).unwrap();
     assert!(encoded.contains(r#""kind":"search""#));
     assert!(!encoded.contains("results"));
+  }
+
+  #[test]
+  fn older_search_pane_gets_safe_presentation_defaults() {
+    let search: SavedSearchState = serde_json::from_str(
+      r#"{"scopePaths":["C:\\work"],"query":"report","matchPath":true}"#,
+    )
+    .unwrap();
+    assert_eq!(search.sort_key, "name");
+    assert!(!search.sort_descending);
+    assert!(search.dirs_first);
+    assert_eq!(search.show_preview, None);
   }
 
   /// 設定を追加する前の state.json でも読めること。

@@ -201,6 +201,10 @@ export type SavedSearchState = {
   scopePaths: string[]
   query: string
   matchPath: boolean
+  sortKey?: SortKey
+  sortDescending?: boolean
+  dirsFirst?: boolean
+  showPreview?: boolean
 }
 export type SavedPaneState = {
   path: string
