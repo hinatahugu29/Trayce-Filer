@@ -48,7 +48,7 @@ export const defaultSort = (): SortSpec => ({
   dirsFirst: true,
   showHidden: false,
 })
-export type WindowInfo = { label: string; path: string; last_focused: number }
+export type WindowInfo = { label: string; path: string; last_focused: number; tray_paths: string[] }
 export type HistoryEntry = { path: string; at: number }
 
 export const listFavorites = () => invoke<string[]>('list_favorites')
@@ -214,6 +214,10 @@ export const registerWindow = (label: string, path: string) =>
   invoke<void>('register_window', { label, path })
 export const setWindowPath = (label: string, path: string) =>
   invoke<void>('set_window_path', { label, path })
+export const setWindowTray = (label: string, paths: string[]) =>
+  invoke<void>('set_window_tray', { label, paths })
+export const WINDOW_TRAY_CHANGED = 'window-tray-changed'
+export type WindowTrayChanged = { label: string; paths: string[] }
 export const touchWindow = (label: string) => invoke<void>('touch_window', { label })
 export const hideOverlay = () => invoke<void>('hide_overlay')
 export const setOverlayMode = (mode: 'compact' | 'workbench') =>

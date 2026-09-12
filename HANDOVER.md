@@ -24,7 +24,7 @@ The feature is intentionally an evolution rather than a direct copy:
 
 - [x] Phase 1 — tab-local tray state, `Alt+Click`, marked-row UI, sidebar tray, session persistence
 - [x] Phase 2 — copy/move tray contents to the active pane using the existing transfer pipeline
-- [ ] Phase 3 — expose the active tray in Workbench and support multi-item drop to a window
+- [x] Phase 3 — expose the active tray in Workbench and support multi-item drop to a window
 - [ ] Phase 4 — refine left-hand/hover interactions based on real use
 
 ## Current status
@@ -37,6 +37,8 @@ The feature is intentionally an evolution rather than a direct copy:
 - Added marked-row treatment, a sidebar tray with missing-path status/removal, and backward-compatible session persistence.
 - Phase 2 implemented: sidebar actions copy/move the tray into that pane through the existing progress, cancellation, and undo pipeline.
 - Copy keeps the tray intact; move removes only source paths reported as completed by the backend.
+- Phase 3 implemented: active-window tray state is synchronized through the Rust window registry and shown in Workbench as a draggable collection.
+- Workbench tray drag defaults to copy; holding Shift while dropping moves and clears the successfully transferred tray.
 
 ## Key integration points
 
@@ -53,16 +55,19 @@ The feature is intentionally an evolution rather than a direct copy:
 - Path identity must be case-insensitive on Windows and ignore trailing separators without damaging drive roots.
 - Copy keeps items in the tray. Successful moves remove only the items actually moved.
 - Missing paths remain visible with a warning until explicitly removed.
-- Workbench needs a clear source-tab context because its current overlay is window-oriented.
+- The overlay uses the most recently focused registered Filer window as its source context. Only that window's active tab tray is shown.
 
 ## Progress log
 
 - 2026-09-12: Created handover before implementation and established phased scope.
 - 2026-09-12: Completed Phase 1 implementation. Verification passed: Svelte diagnostics, 48 frontend tests, 71 Rust tests (plus 1 ignored benchmark), production web build, and `git diff --check`.
 - 2026-09-12: Completed Phase 2. Extended transfer completion events with completed source paths so tray state follows actual results rather than attempted inputs. Full frontend/Rust/build verification passed.
+- 2026-09-12: Completed Phase 3. Added cross-WebView tray synchronization, a Workbench collection strip, and safe-default multi-item card drops. Full automated verification passed.
+- 2026-09-12: Development app launched successfully. Runtime reported that the global hotkey was already owned by another running Filer instance; the new process itself reached the UI event loop and was then stopped.
 
 ## Commit log
 
 - `3f37899` — `docs: add tray workbench implementation handover`
 - `f9ec3a7` — `feat: add tab-local collection tray`
-- Pending: Phase 2 transfer integration commit.
+- `fb97296` — `feat: transfer collected tray items`
+- Pending: Phase 3 Workbench integration commit.

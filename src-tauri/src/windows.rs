@@ -1,11 +1,19 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// オーバーレイ（ホットキーで出す窓一覧）専用のラベル。
 /// このラベルの窓だけはファイラではなく一覧UIを描く。
 pub const OVERLAY_LABEL: &str = "overlay";
+pub const WINDOW_TRAY_CHANGED: &str = "window-tray-changed";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowTrayChanged {
+  label: String,
+  paths: Vec<String>,
+}
 
 #[derive(Clone, Serialize)]
 pub struct WindowInfo {
@@ -14,6 +22,8 @@ pub struct WindowInfo {
   pub path: String,
   /// 一覧の並び順に使う。最後に前面へ来た時刻(ms)。
   pub last_focused: u128,
+  /// その窓で現在アクティブなタブの収集トレイ。
+  pub tray_paths: Vec<String>,
 }
 
 #[derive(Default)]
@@ -39,6 +49,7 @@ impl Registry {
         label: label.to_string(),
         path: path.to_string(),
         last_focused: now_ms(),
+        tray_paths: Vec::new(),
       },
     );
   }
@@ -116,6 +127,15 @@ pub fn set_window_path(app: AppHandle, label: String, path: String) {
   if let Some(win) = app.get_webview_window(&label) {
     let _ = win.set_title(&path);
   }
+}
+
+/// 別WebViewである俯瞰オーバーレイから読めるよう、現在タブのトレイを窓レジストリへ同期する。
+#[tauri::command]
+pub fn set_window_tray(app: AppHandle, label: String, paths: Vec<String>) {
+  if let Some(info) = app.state::<Registry>().windows.lock().unwrap().get_mut(&label) {
+    info.tray_paths = paths.clone();
+  }
+  let _ = app.emit(WINDOW_TRAY_CHANGED, WindowTrayChanged { label, paths });
 }
 
 /// 窓が前面に来たことを記録する。一覧の並び順に効く。

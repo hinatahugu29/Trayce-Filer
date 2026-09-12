@@ -16,13 +16,20 @@
   let dirCache: Record<string, { entries: Entry[]; loading: boolean; error?: string }> = {}
 
   // ドラッグ中のファイル情報
-  let draggingItem: { srcPath: string; srcWindowLabel: string; name: string } | null = null
+  let draggingItem: {
+    paths: string[]
+    srcWindowLabel: string
+    name: string
+    fromTray: boolean
+  } | null = null
   let dropTargetLabel: string | null = null
   let isCopyMode = false
 
   // 表示対象ウィンドウと退避中ウィンドウ
   $: visibleWindows = windows.filter((w) => !hiddenLabels.has(w.label))
   $: hiddenWindows = windows.filter((w) => hiddenLabels.has(w.label))
+  /** オーバーレイを呼び出す直前に最前面だった窓。Registry は最終フォーカス順で返す。 */
+  $: traySource = windows[0]?.tray_paths.length ? windows[0] : undefined
 
   // 表示カード数に応じたレイアウト区分
   $: layoutMode =
@@ -90,15 +97,30 @@
     const fullPath = joinPath(win.path, entry.name)
 
     draggingItem = {
-      srcPath: fullPath,
+      paths: [fullPath],
       srcWindowLabel: win.label,
       name: entry.name,
+      fromTray: false,
     }
     isCopyMode = !!ev.ctrlKey
 
     if (ev.dataTransfer) {
       ev.dataTransfer.effectAllowed = 'copyMove'
       ev.dataTransfer.setData('text/plain', fullPath)
+    }
+  }
+
+  function handleTrayDragStart(win: WindowInfo, ev: DragEvent) {
+    draggingItem = {
+      paths: [...win.tray_paths],
+      srcWindowLabel: win.label,
+      name: `${win.tray_paths.length}件のトレイ`,
+      fromTray: true,
+    }
+    isCopyMode = !ev.shiftKey
+    if (ev.dataTransfer) {
+      ev.dataTransfer.effectAllowed = 'copyMove'
+      ev.dataTransfer.setData('text/plain', win.tray_paths.join('\n'))
     }
   }
 
@@ -109,11 +131,11 @@
 
   function handleCardDragOver(win: WindowInfo, ev: DragEvent) {
     ev.preventDefault()
-    if (!draggingItem || draggingItem.srcWindowLabel === win.label) {
+    if (!draggingItem || (!draggingItem.fromTray && draggingItem.srcWindowLabel === win.label)) {
       if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'none'
       return
     }
-    isCopyMode = ev.ctrlKey
+    isCopyMode = draggingItem.fromTray ? !ev.shiftKey : ev.ctrlKey
     if (ev.dataTransfer) {
       ev.dataTransfer.dropEffect = isCopyMode ? 'copy' : 'move'
     }
@@ -130,17 +152,25 @@
   async function handleCardDrop(win: WindowInfo, ev: DragEvent) {
     ev.preventDefault()
     dropTargetLabel = null
-    if (!draggingItem || draggingItem.srcWindowLabel === win.label) return
+    if (!draggingItem || (!draggingItem.fromTray && draggingItem.srcWindowLabel === win.label)) return
 
-    const srcPath = draggingItem.srcPath
+    const srcPaths = draggingItem.paths
     const srcWindowLabel = draggingItem.srcWindowLabel
     const targetDir = win.path
-    const moveFiles = !ev.ctrlKey // Ctrl 併用時はコピー、通常は移動
+    // 通常項目は従来どおり Ctrl でコピー。収集トレイは安全側のコピーを既定にし、Shift で移動。
+    const moveFiles = draggingItem.fromTray ? ev.shiftKey : !ev.ctrlKey
 
     try {
-      await api.acceptDropped([srcPath], targetDir, moveFiles)
+      await api.acceptDropped(srcPaths, targetDir, moveFiles)
       const actionName = moveFiles ? '移動' : 'コピー'
       onNote(`「${draggingItem.name}」を ${actionName}しました`)
+
+      if (moveFiles && draggingItem.fromTray) {
+        await api.setWindowTray(srcWindowLabel, [])
+        const source = windows.find((w) => w.label === srcWindowLabel)
+        if (source) source.tray_paths = []
+        windows = windows
+      }
 
       // 移動元と移動先のファイル一覧を最新化
       const srcWin = windows.find((w) => w.label === srcWindowLabel)
@@ -285,6 +315,32 @@
     {/if}
   </div>
 
+  {#if traySource}
+    <div class="collection-tray">
+      <div class="collection-copy">
+        <strong>◈ 収集トレイ</strong>
+        <span>{traySource.tray_paths.length}件</span>
+        <small>カードへドラッグでコピー・Shiftを押しながらで移動</small>
+      </div>
+      <div
+        class="collection-items"
+        draggable="true"
+        on:dragstart={(e) => handleTrayDragStart(traySource, e)}
+        on:dragend={handleDragEnd}
+        role="button"
+        tabindex="0"
+        title="まとめて送り先カードへドラッグ"
+      >
+        {#each traySource.tray_paths.slice(0, 5) as path (api.pathIdentity(path))}
+          <span class="collection-pill">{splitPath(path).tail || path}</span>
+        {/each}
+        {#if traySource.tray_paths.length > 5}
+          <span class="collection-more">+{traySource.tray_paths.length - 5}</span>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
   <!-- 下部：一時退避トレイ（除外されたウィンドウ群） -->
   {#if hiddenWindows.length > 0}
     <div class="hidden-tray">
@@ -323,6 +379,16 @@
     overflow: hidden;
     gap: 8px;
   }
+
+  .collection-tray { display: flex; align-items: center; gap: 12px; flex: none; padding: 8px 12px; border: 1px solid #285847; border-radius: 7px; background: #172a25; color: #cdebe1; }
+  .collection-copy { display: flex; align-items: baseline; gap: 7px; flex: none; }
+  .collection-copy strong { color: #65d0ad; font-size: 12px; }
+  .collection-copy span { font-size: 11px; }
+  .collection-copy small { color: #75988d; font-size: 9.5px; }
+  .collection-items { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; overflow: hidden; cursor: grab; }
+  .collection-items:active { cursor: grabbing; }
+  .collection-pill { max-width: 150px; padding: 4px 7px; border: 1px solid #376e5c; border-radius: 12px; background: #203b33; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+  .collection-more { color: #69c6a8; font-size: 10px; }
 
   .cards-viewport {
     flex: 1;

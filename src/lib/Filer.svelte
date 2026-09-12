@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { getCurrentWindow } from '@tauri-apps/api/window'
-  import type { UnlistenFn } from '@tauri-apps/api/event'
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event'
   import Pane from './Pane.svelte'
   import SettingsDialog from './SettingsDialog.svelte'
   import * as api from './api'
@@ -42,6 +42,7 @@
   let settingsOpen = false
 
   $: activeTab = tabs.find((t) => t.id === activeTabId)
+  $: if (ready && activeTab) api.setWindowTray(label, activeTab.trayItems).catch(() => {})
 
   let notes: string[] = []
   function note(message: string) {
@@ -240,6 +241,7 @@
 
   let unlistenDrop: UnlistenFn | null = null
   let unlistenFocus: UnlistenFn | null = null
+  let unlistenTray: UnlistenFn | null = null
 
   /** 起動に失敗した理由。ここが埋まる時は画面が空のままになるので必ず見せる。 */
   let bootError: string | null = null
@@ -307,10 +309,10 @@
       const start = initialWindowPath ?? (await api.homeDir())
       newTab(start)
     }
-    ready = true
-
     // main 窓は Rust の open_window を通らないので自己申告で登録する。
     await api.registerWindow(label, activePanePath() ?? (await api.homeDir()))
+    // 登録前にトレイ同期が走ると、空のレジストリへ送って失われるので最後に ready にする。
+    ready = true
 
     unlistenDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
       if (event.payload.type === 'over') {
@@ -329,11 +331,21 @@
     unlistenFocus = await win.onFocusChanged(({ payload }) => {
       if (payload) api.touchWindow(label)
     })
+
+    unlistenTray = await listen<api.WindowTrayChanged>(api.WINDOW_TRAY_CHANGED, (ev) => {
+      if (ev.payload.label !== label || !activeTab) return
+      const current = activeTab.trayItems.map(api.pathIdentity)
+      const incoming = ev.payload.paths.map(api.pathIdentity)
+      if (current.length === incoming.length && current.every((path, i) => path === incoming[i])) return
+      activeTab.trayItems = ev.payload.paths
+      tabs = tabs
+    })
   }
 
   onDestroy(() => {
     unlistenDrop?.()
     unlistenFocus?.()
+    unlistenTray?.()
   })
 </script>
 
