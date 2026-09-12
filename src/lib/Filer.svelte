@@ -177,6 +177,15 @@
     tabs = tabs
   }
 
+  function openDirectoryFromSearch(id: number, path: string) {
+    const pane = activeTab?.panes.find((candidate) => candidate.id === id)
+    if (!pane) return
+    pane.path = path
+    pane.kind = 'directory'
+    tabs = tabs
+    syncWindowPath()
+  }
+
   function toggleTrayItem(path: string) {
     const tab = activeTab
     if (!tab) return
@@ -441,12 +450,16 @@
               directoryPath={pane.path}
               search={pane.search ?? { scopePaths: [pane.path], query: '', matchPath: true }}
               {settings}
+              {dragIcon}
+              trayItems={activeTab.trayItems}
+              onTrayToggle={toggleTrayItem}
               active={pane.id === activeTab.activeId}
               keyboardTarget={pane.id === (hoveredPaneId ?? activeTab.activeId)}
               multi={activeTab.panes.length > 1}
               closable={activeTab.panes.length > 1}
               onSearchChange={(search) => updatePaneSearch(pane.id, search)}
               onKindChange={(kind) => changePaneKind(pane.id, kind)}
+              onOpenDirectory={(path) => openDirectoryFromSearch(pane.id, path)}
               onHoverChange={(hovered) => {
                 if (hovered) hoveredPaneId = pane.id
                 else if (hoveredPaneId === pane.id) hoveredPaneId = null

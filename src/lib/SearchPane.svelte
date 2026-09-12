@@ -1,20 +1,27 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+  import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
   import * as api from './api'
   import type { PaneKind, SavedSearchState, Settings } from './api'
-  import { formatModified, formatSize, splitPath } from './api'
+  import FileList from './FileList.svelte'
+  import Preview from './Preview.svelte'
+  import { splitPath } from './api'
   import { matchAction } from './shortcuts'
 
   export let directoryPath: string
   export let search: SavedSearchState
   export let settings: Settings
+  export let dragIcon = ''
+  export let trayItems: string[] = []
   export let closable = false
   export let active = false
   export let multi = false
   export let keyboardTarget = false
   export let onSearchChange: (search: SavedSearchState) => void = () => {}
   export let onKindChange: (kind: PaneKind) => void = () => {}
+  export let onOpenDirectory: (path: string) => void = () => {}
+  export let onTrayToggle: (path: string) => void = () => {}
   export let onSplit: (path: string) => void = () => {}
   export let onClose: () => void = () => {}
   export let onActivate: () => void = () => {}
@@ -24,6 +31,23 @@
   $: scope = search.scopePaths[0] || directoryPath
   $: scopeLabel = splitPath(scope).tail || scope
   let results: api.SearchEntry[] = []
+  let selection: string[] = []
+  let showPreview = settings.showPreview
+  let sort: api.SortSpec = { key: 'name', descending: false, dirsFirst: true, showHidden: true }
+  type SearchListEntry = api.Entry & { path: string }
+  $: listEntries = results.map((entry) => ({
+    ...entry,
+    is_dir: entry.isDir,
+    hidden: false,
+  })) as SearchListEntry[]
+
+  function resultPath(entry: api.Entry): string {
+    return (entry as SearchListEntry).path
+  }
+
+  function resultParent(entry: api.Entry): string {
+    return splitPath(resultPath(entry)).lead
+  }
   let requestId: string | null = null
   let running = false
   let scanned = 0
@@ -84,10 +108,62 @@
     status = '停止しています…'
   }
 
+  function orderedResults(values: api.SearchEntry[]): api.SearchEntry[] {
+    const direction = sort.descending ? -1 : 1
+    return [...values].sort((a, b) => {
+      if (sort.dirsFirst && a.isDir !== b.isDir) return a.isDir ? -1 : 1
+      let compared = 0
+      if (sort.key === 'size') compared = a.size - b.size
+      else if (sort.key === 'modified') compared = a.modified - b.modified
+      else if (sort.key === 'ext') compared = a.ext.localeCompare(b.ext)
+      else compared = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+      return compared * direction || a.path.localeCompare(b.path)
+    })
+  }
+
+  function sortResults(key: api.SortKey) {
+    if (sort.key === key) sort = { ...sort, descending: !sort.descending }
+    else sort = { ...sort, key, descending: false }
+    results = orderedResults(results)
+  }
+
+  async function launch(_entry: api.Entry, path: string) {
+    try {
+      await openPath(path)
+    } catch (error) {
+      onNote(`開けません: ${error}`)
+    }
+  }
+
+  async function revealSelection() {
+    if (!selection[0]) return
+    try {
+      await revealItemInDir(selection[0])
+    } catch (error) {
+      onNote(`場所を表示できません: ${error}`)
+    }
+  }
+
+  async function copySelection(cut: boolean) {
+    if (!selection.length) return
+    await api.setClipboard(selection, cut)
+    onNote(`${cut ? '切り取り' : 'コピー'} ${selection.length}件`)
+  }
+
+  async function copyPaths() {
+    if (!selection.length) return
+    try {
+      await navigator.clipboard.writeText(selection.join('\r\n'))
+      onNote(`${selection.length}件のパスをコピー`)
+    } catch (error) {
+      onNote(`コピーできません: ${error}`)
+    }
+  }
+
   onMount(async () => {
     unlistenBatch = await listen<api.SearchBatchEvent>(api.SEARCH_BATCH, ({ payload }) => {
       if (payload.id !== requestId) return
-      results = [...results, ...payload.entries]
+      results = orderedResults([...results, ...payload.entries])
       scanned = payload.scanned
       status = `${scanned.toLocaleString()}件を確認中`
     })
@@ -117,6 +193,22 @@
     const el = ev.target as HTMLElement | null
     if (!keyboardTarget || (el && (el.tagName === 'INPUT' || el.isContentEditable))) return
     switch (matchAction(ev, settings.shortcuts)) {
+      case 'copy':
+        ev.preventDefault()
+        copySelection(false)
+        break
+      case 'cut':
+        ev.preventDefault()
+        copySelection(true)
+        break
+      case 'copyPath':
+        ev.preventDefault()
+        copyPaths()
+        break
+      case 'reload':
+        ev.preventDefault()
+        reload()
+        break
       case 'hoverClosePane':
         if (!closable) return
         ev.preventDefault()
@@ -125,6 +217,10 @@
       case 'hoverSplitPane':
         ev.preventDefault()
         onSplit(directoryPath)
+        break
+      case 'hoverPreview':
+        ev.preventDefault()
+        showPreview = !showPreview
         break
       default:
         break
@@ -149,6 +245,9 @@
       <span class="scope" title={scope}>対象: {scopeLabel}</span>
     </div>
     <div class="actions">
+      <button type="button" title={showPreview ? 'プレビューを隠す' : 'プレビューを出す'} class:on={showPreview} on:click={() => (showPreview = !showPreview)}>◐</button>
+      <button type="button" title="選択項目をトレイへ追加・解除" disabled={selection.length === 0} on:click={() => selection.forEach(onTrayToggle)}>◈</button>
+      <button type="button" title="選択項目の場所を表示" disabled={selection.length === 0} on:click={revealSelection}>⧉</button>
       <button type="button" title="通常のフォルダペインに戻す" on:click={() => onKindChange('directory')}>▣</button>
       <button type="button" title="このペインを左右に分割" on:click={() => onSplit(directoryPath)}>⫿</button>
       {#if closable}<button type="button" title="このペインを閉じる" on:click={onClose}>✕</button>{/if}
@@ -187,15 +286,28 @@
       <small>Enterで検索、検索中はEscapeで停止</small>
     </div>
   {:else}
-    <div class="results" role="list" aria-label="検索結果">
-      {#each results as entry (entry.path)}
-        <div class="result" role="listitem" title={entry.path}>
-          <span class="icon">{entry.isDir ? '📁' : '▪'}</span>
-          <span class="result-main"><strong>{entry.name}</strong><small>{splitPath(entry.path).lead}</small></span>
-          <span class="meta">{entry.isDir ? '' : formatSize(entry.size)}</span>
-          <span class="meta date">{formatModified(entry.modified)}</span>
-        </div>
-      {/each}
+    <div class="result-area">
+      <div class="list-slot">
+        <FileList
+          entries={listEntries}
+          parent={null}
+          path={`search:${requestId ?? 'idle'}`}
+          {dragIcon}
+          {sort}
+          {trayItems}
+          {onTrayToggle}
+          resolvePath={resultPath}
+          secondaryLabel={resultParent}
+          onOpen={onOpenDirectory}
+          onLaunch={launch}
+          onSort={sortResults}
+          onSelectionChange={(paths) => (selection = paths)}
+          {onNote}
+        />
+      </div>
+      {#if showPreview}
+        <div class="preview-slot"><Preview path={selection.length === 1 ? selection[0] : null} /></div>
+      {/if}
     </div>
   {/if}
 </section>
@@ -213,6 +325,7 @@
   button { height: 26px; border: 1px solid #454b50; border-radius: 4px; background: #303438; color: #b8c0c7; cursor: pointer; }
   button:disabled { cursor: default; opacity: 0.45; }
   .actions button { width: 26px; height: 24px; padding: 0; }
+  .actions button.on { border-color: #4c9aff; background: #35506f; color: #fff; }
   .scope-row, .query-row { display: flex; align-items: center; gap: 6px; padding: 7px 10px; }
   .scope-row { border-bottom: 1px solid #292d30; color: #89949c; font-size: 11px; }
   .query-row { border-bottom: 1px solid #2b2f32; padding-top: 0; }
@@ -227,14 +340,7 @@
   .empty strong { color: #c8ced3; }
   .empty p { margin: 8px 0 3px; }
   .empty small { color: #68727a; }
-  .results { flex: 1; min-height: 0; overflow: auto; }
-  .result { display: flex; min-width: 0; height: 42px; align-items: center; gap: 8px; border-bottom: 1px solid #25292c; padding: 0 10px; }
-  .result:hover { background: #242a2d; }
-  .icon { width: 18px; flex: none; color: #76b4e6; text-align: center; }
-  .result-main { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
-  .result-main strong, .result-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .result-main strong { color: #d7dce0; font-size: 12px; font-weight: 500; }
-  .result-main small { color: #75818a; font-size: 10px; }
-  .meta { width: 68px; flex: none; color: #7f8990; font-size: 10px; text-align: right; }
-  .meta.date { width: 104px; }
+  .result-area { display: flex; flex: 1; min-height: 0; }
+  .list-slot { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+  .preview-slot { width: 260px; min-width: 160px; border-left: 1px solid #2c2c2c; }
 </style>

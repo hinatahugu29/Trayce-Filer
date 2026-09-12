@@ -25,6 +25,10 @@
    * 呼び出し側はこれを見て「選択に対する操作」と「この場所に対する操作」を出し分ける。
    */
   export let onContext: (ev: MouseEvent, entry: Entry | null) => void = () => {}
+  /** Virtual listings such as search results already own an absolute path. */
+  export let resolvePath: (entry: Entry) => string = (entry) => joinPath(path, entry.name)
+  /** Optional second line used by virtual listings to show the source directory. */
+  export let secondaryLabel: (entry: Entry) => string = () => ''
 
   const ROW_H = 24
   /** 画面外に少し余分に描いて、速いスクロールでも空白が見えないようにする。 */
@@ -79,23 +83,18 @@
     onSelectionChange([])
   }
 
-  /**
-   * 選択は**名前**で持つ。
-   *
-   * 一覧は必ず1つのディレクトリなので名前で一意に決まる。
-   * 絶対パスは外へ渡す時にだけ組み立てる。
-   */
+  /** Absolute paths also keep same-named results from different folders distinct. */
   let selected = new Set<string>()
   /** キーボードの選択位置。rows の添字。 */
   let cursor = 0
   /** Shift+クリック / Shift+↑↓ の起点。 */
   let anchor = 0
 
-  const fullPath = (name: string) => joinPath(path, name)
+  const fullPath = (entry: Entry) => resolvePath(entry)
   $: trayKeys = new Set(trayItems.map(pathIdentity))
 
   function emitSelection() {
-    onSelectionChange([...selected].map(fullPath))
+    onSelectionChange([...selected])
   }
 
   /** 起点から現在位置までを選択する。 */
@@ -105,7 +104,7 @@
       rows
         .slice(lo, hi + 1)
         .filter((r): r is { kind: 'entry'; entry: Entry } => r.kind === 'entry')
-        .map((r) => r.entry.name)
+        .map((r) => fullPath(r.entry))
     )
     emitSelection()
   }
@@ -116,7 +115,7 @@
 
     if (ev.altKey) {
       ev.preventDefault()
-      onTrayToggle(fullPath(row.entry.name))
+      onTrayToggle(fullPath(row.entry))
       return
     }
 
@@ -125,7 +124,7 @@
       return
     }
     anchor = index
-    const name = row.entry.name
+    const name = fullPath(row.entry)
     if (ev.ctrlKey) {
       selected.has(name) ? selected.delete(name) : selected.add(name)
       selected = selected
@@ -144,9 +143,9 @@
   function onRowContext(index: number, entry: Entry, ev: MouseEvent) {
     ev.preventDefault()
     cursor = index
-    if (!selected.has(entry.name)) {
+    if (!selected.has(fullPath(entry))) {
       anchor = index
-      selected = new Set([entry.name])
+      selected = new Set([fullPath(entry)])
       emitSelection()
     }
     onContext(ev, entry)
@@ -163,8 +162,8 @@
   /** カーソル位置の行を開く。フォルダなら移動、ファイルなら既定のアプリ。 */
   function activate(row: Row) {
     if (row.kind === 'up') return onOpen(row.path)
-    if (row.entry.is_dir) return onOpen(fullPath(row.entry.name))
-    onLaunch(row.entry, fullPath(row.entry.name))
+    if (row.entry.is_dir) return onOpen(fullPath(row.entry))
+    onLaunch(row.entry, fullPath(row.entry))
   }
 
   async function moveCursor(delta: number, extend: boolean) {
@@ -177,7 +176,7 @@
     } else {
       anchor = cursor
       const row = rows[cursor]
-      selected = row.kind === 'entry' ? new Set([row.entry.name]) : new Set()
+      selected = row.kind === 'entry' ? new Set([fullPath(row.entry)]) : new Set()
       emitSelection()
     }
     await scrollCursorIntoView()
@@ -240,7 +239,7 @@
         break
       case 'Delete':
         ev.preventDefault()
-        if (selected.size) onDelete([...selected].map(fullPath))
+        if (selected.size) onDelete([...selected])
         break
       case 'F2': {
         ev.preventDefault()
@@ -251,7 +250,7 @@
       case 'a':
         if (ev.ctrlKey) {
           ev.preventDefault()
-          selected = new Set(entries.map((e) => e.name))
+          selected = new Set(entries.map(fullPath))
           emitSelection()
         }
         break
@@ -280,9 +279,7 @@
     pending = null // startDrag は制御を OS に渡すので、先に掴み状態を解く
 
     // 掴んだものが選択に含まれていなければ、それ単体を運ぶ。
-    const items = selected.has(entry.name)
-      ? [...selected].map(fullPath)
-      : [fullPath(entry.name)]
+    const items = selected.has(fullPath(entry)) ? [...selected] : [fullPath(entry)]
 
     onNote(`drag out 開始: ${items.length}件`)
     try {
@@ -334,7 +331,7 @@
   <!-- 実件数ぶんの高さを確保して、スクロールバーの長さを正しく見せる。 -->
   <div class="spacer" style="height: {rows.length * ROW_H}px">
     <div class="rows" style="transform: translateY({first * ROW_H}px)">
-      {#each visible as row, vi (row.kind === 'up' ? '..' : row.entry.name)}
+      {#each visible as row, vi (row.kind === 'up' ? '..' : fullPath(row.entry))}
         {@const index = first + vi}
         {#if row.kind === 'up'}
           <div
@@ -355,13 +352,13 @@
           <div
             class="row"
             role="option"
-            aria-selected={selected.has(entry.name)}
+            aria-selected={selected.has(fullPath(entry))}
             tabindex="-1"
             class:dir={entry.is_dir}
-            class:selected={selected.has(entry.name)}
+            class:selected={selected.has(fullPath(entry))}
             class:cursor={index === cursor}
             class:hidden={entry.hidden}
-            class:in-tray={trayKeys.has(pathIdentity(fullPath(entry.name)))}
+            class:in-tray={trayKeys.has(pathIdentity(fullPath(entry)))}
             style="height: {ROW_H}px"
             on:click={(e) => onRowClick(index, row, e)}
             on:dblclick={() => activate(row)}
@@ -371,8 +368,8 @@
           >
             <span class="col c-name">
               <span class="icon">{entry.is_dir ? '📁' : '📄'}</span>
-              <span class="name">{entry.name}</span>
-              {#if trayKeys.has(pathIdentity(fullPath(entry.name)))}<span class="tray-mark" title="トレイに登録済み">◈</span>{/if}
+              <span class="name-stack"><span class="name">{entry.name}</span>{#if secondaryLabel(entry)}<small>{secondaryLabel(entry)}</small>{/if}</span>
+              {#if trayKeys.has(pathIdentity(fullPath(entry)))}<span class="tray-mark" title="トレイに登録済み">◈</span>{/if}
             </span>
             <span class="col c-ext">{entry.is_dir ? '' : entry.ext}</span>
             <span class="col c-size">{formatSize(entry.size, entry.is_dir)}</span>
@@ -454,6 +451,9 @@
   .row.in-tray { box-shadow: inset 3px 0 #58c6a5; }
   .row.in-tray:not(.selected) { background: #20332f; }
   .tray-mark { margin-left: auto; padding-right: 5px; color: #66d1ae; font-size: 10px; }
+  .name-stack { display: flex; min-width: 0; flex: 1; flex-direction: column; line-height: 10px; }
+  .name-stack .name, .name-stack small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name-stack small { color: #6f7880; font-size: 8px; }
   /* キーボードの位置。選択とは別に示さないと、Shift 選択中に迷子になる。 */
   .row.cursor {
     box-shadow: inset 0 0 0 1px #4c9aff;
