@@ -41,7 +41,8 @@ results available as normal copy/move/preview/tray sources.
 - [x] Phase 11 — implement cancellable, streaming filename search with explicit scope
 - [x] Phase 12 — share selection, preview, tray, drag, copy, and move behavior with search results
 - [x] Phase 13 — persist and restore search scope, query, options, and result presentation
-- [ ] Phase 14 — bring over advanced query/sort/history behavior from `File_Search_APP` selectively
+- [x] Phase 14 — bring over advanced query/sort/history behavior from `File_Search_APP` selectively
+- [ ] Search follow-up — profile real-device performance before deciding on parallel scan and pause/resume
 
 ## Current status
 
@@ -75,6 +76,8 @@ results available as normal copy/move/preview/tray sources.
 - Double-clicking a result folder converts that search pane back to a directory pane at the chosen folder while retaining its dormant search conditions. Copying or dragging to a directory pane uses the existing transfer pipeline; cutting then pasting uses the existing cross-window clipboard move path.
 - Phase 13 implemented: search scope, query, path matching, sort key/direction, directory-first preference, and preview visibility persist per pane. Restored panes register event listeners before automatically rerunning saved non-empty searches, so fast searches cannot lose their first events.
 - Search result columns now collapse by available pane width, preserving the name/source-path column when a search pane sits beside a destination pane.
+- Phase 14 implemented selectively: spaces are AND, `|` is OR, and a leading `!` or `-` excludes a term. Semicolon/full-width-semicolon separated roots are searched together, duplicate roots are collapsed, and each pane keeps ten deduplicated recent queries.
+- Parallel scanning and pause/resume remain a measured follow-up. Cancellation is already available; concurrency should be added only if real-device profiling shows that filesystem latency justifies the extra pressure and ordering complexity.
 
 ## Key integration points
 
@@ -151,6 +154,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Completed Phase 11 background search and incremental result display. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 76 Rust tests (1 ignored benchmark), and a production build.
 - 2026-09-13: Completed Phase 12 actionable search results and generalized file-list path identity for virtual listings. Full verification passed with the same 48 frontend and 76 Rust tests plus production build.
 - 2026-09-13: Completed Phase 13 search-session restoration and narrow-pane presentation. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 77 Rust tests (1 ignored benchmark), and a production build.
+- 2026-09-13: Completed the selected Phase 14 advanced-search set: AND/OR/NOT, multiple roots, duplicate-root suppression, and per-pane query history. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 79 Rust tests (1 ignored benchmark), and a production build.
 
 ## Commit log
 
@@ -177,3 +181,5 @@ Each slice gets its own implementation commit followed by verification and a han
 - `fd36884` — `feat: make search results actionable`
 - `3b3dca0` — `docs: record actionable search results`
 - `28ea183` — `feat: restore search pane sessions`
+- `c6b3423` — `docs: record search session milestone`
+- `cee3f60` — `feat: add advanced pane search`
