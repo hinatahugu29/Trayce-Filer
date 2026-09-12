@@ -28,8 +28,9 @@
   export let onHoverChange: (hovered: boolean) => void = () => {}
   export let onNote: (message: string) => void = () => {}
 
-  $: scope = search.scopePaths[0] || directoryPath
-  $: scopeLabel = splitPath(scope).tail || scope
+  $: scopes = search.scopePaths.length ? search.scopePaths : [directoryPath]
+  $: scope = scopes.join('; ')
+  $: scopeLabel = scopes.length > 1 ? `${scopes.length}か所` : splitPath(scopes[0]).tail || scopes[0]
   let results: api.SearchEntry[] = []
   let selection: string[] = []
   let showPreview = search.showPreview ?? settings.showPreview
@@ -76,8 +77,12 @@
     onSearchChange({ ...search, query })
   }
 
-  function updateScope(scopePath: string) {
-    onSearchChange({ ...search, scopePaths: [scopePath] })
+  function updateScope(scopeText: string) {
+    const scopePaths = scopeText
+      .split(/[;；\n]/)
+      .map((path) => path.trim())
+      .filter(Boolean)
+    onSearchChange({ ...search, scopePaths })
   }
 
   function toggleMatchPath() {
@@ -103,6 +108,8 @@
     if (requestId) await api.cancelSearch(requestId).catch(() => {})
     const id = nextRequestId()
     requestId = id
+    const recentQueries = [query, ...(search.recentQueries ?? []).filter((item) => item.toLocaleLowerCase() !== query.toLocaleLowerCase())].slice(0, 10)
+    onSearchChange({ ...search, query, recentQueries })
     results = []
     scanned = 0
     running = true
@@ -278,7 +285,7 @@
 
   <div class="scope-row">
     <span>対象</span>
-    <input class="scope-input" value={scope} spellcheck="false" aria-label="検索対象" on:change={(event) => updateScope(event.currentTarget.value.trim())} />
+    <input class="scope-input" value={scope} placeholder="複数指定は ; で区切る" spellcheck="false" aria-label="検索対象" on:change={(event) => updateScope(event.currentTarget.value)} />
   </div>
   <div class="query-row">
     <input
@@ -298,7 +305,23 @@
     {:else}
       <button type="button" disabled={!search.query.trim() || !scope.trim()} on:click={runSearch}>検索</button>
     {/if}
+    {#if (search.recentQueries?.length ?? 0) > 0}
+      <select
+        aria-label="検索履歴"
+        title="このペインの検索履歴"
+        value=""
+        on:change={(event) => {
+          if (event.currentTarget.value) updateQuery(event.currentTarget.value)
+          event.currentTarget.value = ''
+        }}
+      >
+        <option value="">履歴</option>
+        {#each search.recentQueries ?? [] as query}<option value={query}>{query}</option>{/each}
+      </select>
+    {/if}
   </div>
+
+  <div class="syntax"><span>空白: AND</span><span>|: OR</span><span>! または -: 除外</span></div>
 
   <div class="status" class:searching={running}>{status}</div>
   {#if results.length === 0}
@@ -356,6 +379,8 @@
   input:focus { border-color: #63cfad; box-shadow: 0 0 0 1px rgba(99, 207, 173, 0.2); }
   .scope-input { border-color: transparent; background: transparent; color: #aab2b8; padding: 4px 6px; }
   .stop { border-color: #80504e; color: #f0aaa4; }
+  select { height: 26px; max-width: 82px; border: 1px solid #454b50; border-radius: 4px; background: #303438; color: #aeb7be; font-size: 10px; }
+  .syntax { display: flex; gap: 12px; border-bottom: 1px solid #292d30; color: #67727a; font-size: 9px; padding: 2px 11px 5px; }
   .status { min-height: 18px; border-bottom: 1px solid #292d30; color: #89949c; font-size: 11px; padding: 4px 11px; }
   .status.searching { color: #63cfad; }
   .empty { display: grid; flex: 1; place-content: center; justify-items: center; color: #7e8992; text-align: center; }

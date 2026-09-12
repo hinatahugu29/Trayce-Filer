@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -59,12 +59,58 @@ fn normalize(value: &str) -> String {
   value.replace('\u{3000}', " ").to_lowercase()
 }
 
-fn matches_query(name: &str, path: &str, query: &str, match_path: bool) -> bool {
-  let name = normalize(name);
-  let path = if match_path { normalize(path) } else { String::new() };
+#[derive(Debug, PartialEq, Eq)]
+enum QueryToken {
+  Include(String),
+  Exclude(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct QueryClause(Vec<QueryToken>);
+
+fn parse_query(query: &str) -> Vec<QueryClause> {
   normalize(query)
     .split_whitespace()
-    .all(|term| name.contains(term) || (match_path && path.contains(term)))
+    .filter_map(|part| {
+      let tokens = part
+        .split('|')
+        .filter_map(|value| {
+          let value = value.trim();
+          if value.is_empty() {
+            return None;
+          }
+          if let Some(excluded) = value.strip_prefix('!').or_else(|| value.strip_prefix('-')) {
+            (!excluded.is_empty()).then(|| QueryToken::Exclude(excluded.replace('/', "\\")))
+          } else {
+            Some(QueryToken::Include(value.replace('/', "\\")))
+          }
+        })
+        .collect::<Vec<_>>();
+      (!tokens.is_empty()).then_some(QueryClause(tokens))
+    })
+    .collect()
+}
+
+fn matches_query(name: &str, path: &str, query: &str, match_path: bool) -> bool {
+  let name = normalize(name);
+  let path = if match_path { normalize(path).replace('/', "\\") } else { String::new() };
+  let contains = |term: &str| name.contains(term) || (match_path && path.contains(term));
+
+  parse_query(query).iter().all(|clause| {
+    let included = clause
+      .0
+      .iter()
+      .filter_map(|token| match token {
+        QueryToken::Include(term) => Some(term),
+        QueryToken::Exclude(_) => None,
+      })
+      .collect::<Vec<_>>();
+    let exclusions_clear = clause.0.iter().all(|token| match token {
+      QueryToken::Exclude(term) => !contains(term),
+      QueryToken::Include(_) => true,
+    });
+    exclusions_clear && (included.is_empty() || included.iter().any(|term| contains(term)))
+  })
 }
 
 fn search_entry(path: PathBuf, is_dir: bool) -> SearchEntry {
@@ -108,12 +154,17 @@ where
   }
 
   let mut stack = Vec::new();
+  let mut seen_roots = HashSet::new();
   for root in roots {
     let path = Path::new(root);
     if !path.is_dir() {
       return Err(format!("検索対象を開けません: {root}"));
     }
-    stack.push(path.to_path_buf());
+    let canonical = path.canonicalize().map_err(|error| format!("検索対象を開けません: {root} ({error})"))?;
+    let identity = canonical.to_string_lossy().to_lowercase();
+    if seen_roots.insert(identity) {
+      stack.push(canonical);
+    }
   }
 
   let mut outcome = ScanOutcome::default();
@@ -262,6 +313,20 @@ mod tests {
   }
 
   #[test]
+  fn query_supports_or_exclusion_and_full_width_spaces() {
+    assert!(matches_query("blue icon.png", r"C:\Assets\blue icon.png", "jpg|png　!draft", true));
+    assert!(!matches_query("blue draft.png", r"C:\Assets\blue draft.png", "jpg|png !draft", true));
+    assert!(!matches_query("blue icon.txt", r"C:\Assets\blue icon.txt", "jpg|png", true));
+    assert_eq!(
+      parse_query("blue|green -draft"),
+      vec![
+        QueryClause(vec![QueryToken::Include("blue".into()), QueryToken::Include("green".into())]),
+        QueryClause(vec![QueryToken::Exclude("draft".into())]),
+      ]
+    );
+  }
+
+  #[test]
   fn scan_streams_matches_and_skips_non_matches() {
     let root = temp_dir("matches");
     fs::create_dir_all(root.join("nested")).unwrap();
@@ -298,6 +363,26 @@ mod tests {
     )
     .unwrap();
     assert_eq!(outcome.scanned, 0);
+    fs::remove_dir_all(root).unwrap();
+  }
+
+  #[test]
+  fn duplicate_roots_do_not_duplicate_results() {
+    let root = temp_dir("duplicate_roots");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("match.txt"), b"data").unwrap();
+    let root_text = root.to_string_lossy().to_string();
+    let mut found = Vec::new();
+    let outcome = scan_roots(
+      &[root_text.clone(), root_text],
+      "match",
+      true,
+      &AtomicBool::new(false),
+      |batch, _| found.extend(batch),
+    )
+    .unwrap();
+    assert_eq!(outcome.matched, 1);
+    assert_eq!(found.len(), 1);
     fs::remove_dir_all(root).unwrap();
   }
 }

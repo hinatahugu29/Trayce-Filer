@@ -79,6 +79,7 @@ pub struct SavedSearchState {
   pub sort_descending: bool,
   pub dirs_first: bool,
   pub show_preview: Option<bool>,
+  pub recent_queries: Vec<String>,
 }
 
 impl Default for SavedSearchState {
@@ -91,6 +92,7 @@ impl Default for SavedSearchState {
       sort_descending: false,
       dirs_first: true,
       show_preview: None,
+      recent_queries: Vec::new(),
     }
   }
 }
@@ -407,7 +409,7 @@ mod tests {
   #[test]
   fn search_pane_state_round_trips_without_results() {
     let session: SessionState = serde_json::from_str(
-      r#"{"tabs":[{"panes":[{"path":"C:\\work","kind":"search","search":{"scopePaths":["C:\\work","D:\\assets"],"query":"blue icon","matchPath":true,"sortKey":"modified","sortDescending":true,"dirsFirst":false,"showPreview":true}}],"activePaneIndex":0}],"activeTabIndex":0}"#,
+      r#"{"tabs":[{"panes":[{"path":"C:\\work","kind":"search","search":{"scopePaths":["C:\\work","D:\\assets"],"query":"blue icon","matchPath":true,"sortKey":"modified","sortDescending":true,"dirsFirst":false,"showPreview":true,"recentQueries":["blue icon","green|red !draft"]}}],"activePaneIndex":0}],"activeTabIndex":0}"#,
     )
     .unwrap();
 
@@ -421,6 +423,7 @@ mod tests {
     assert!(search.sort_descending);
     assert!(!search.dirs_first);
     assert_eq!(search.show_preview, Some(true));
+    assert_eq!(search.recent_queries, ["blue icon", "green|red !draft"]);
 
     let encoded = serde_json::to_string(&session).unwrap();
     assert!(encoded.contains(r#""kind":"search""#));
@@ -437,6 +440,7 @@ mod tests {
     assert!(!search.sort_descending);
     assert!(search.dirs_first);
     assert_eq!(search.show_preview, None);
+    assert!(search.recent_queries.is_empty());
   }
 
   /// 設定を追加する前の state.json でも読めること。

@@ -60,6 +60,7 @@
       sortDescending: settings?.sortDescending ?? false,
       dirsFirst: settings?.dirsFirst ?? true,
       showPreview: settings?.showPreview ?? false,
+      recentQueries: [],
     }
   }
 
