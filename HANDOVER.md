@@ -36,8 +36,8 @@ results available as normal copy/move/preview/tray sources.
 - [x] Phase 7 — clarify tray destination and add selected-only removal
 - [x] Phase 8 — asynchronous Workbench transfer with progress, cancellation, and race-safe completion
 - [x] Lifecycle fix — exit the process when the last normal Filer window closes
-- [ ] Phase 9 — introduce a backward-compatible pane-kind model (`directory` / `search`)
-- [ ] Phase 10 — add a search-pane shell and role-switching UI without changing directory-pane behavior
+- [x] Phase 9 — introduce a backward-compatible pane-kind model (`directory` / `search`)
+- [x] Phase 10 — add a search-pane shell and role-switching UI without changing directory-pane behavior
 - [ ] Phase 11 — implement cancellable, streaming filename search with explicit scope
 - [ ] Phase 12 — share selection, preview, tray, drag, copy, and move behavior with search results
 - [ ] Phase 13 — persist and restore search scope, query, options, and result presentation
@@ -67,6 +67,8 @@ results available as normal copy/move/preview/tray sources.
 - Completion handling removes only actually moved tray sources, refreshes both sides, distinguishes success/cancel/error, and buffers events that can arrive before the start call returns.
 - Reviewed `E:\CODE\Antigravity\File_Search_APP` as the reference search implementation. Its useful seams are the query parser, parallel scanner/search worker, incremental result delivery, cancellation/pause behavior, and native multi-path drag support.
 - Chosen direction: search is a pane role, not a temporary palette. A search pane remains beside ordinary directory panes and acts as a first-class source for existing file operations.
+- Phase 9 implemented: pane roles and dormant search conditions now round-trip through session state. Sessions from older builds default safely to directory panes, and search results themselves are intentionally not serialized.
+- Phase 10 implemented: a directory pane can switch to a clearly identified search shell and back while retaining its directory context and draft query. Split, close, hover targeting, and drop rejection have explicit search-pane behavior.
 
 ## Key integration points
 
@@ -139,6 +141,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-12: Fixed application shutdown semantics after real-device testing revealed that the hidden reusable overlay kept the release executable locked.
 - 2026-09-12: Completed Phase 8 asynchronous Workbench transfers with progress, cancellation, overlap prevention, race-safe completion, and actual-result tray updates. Full verification passed.
 - 2026-09-12: Planned the next track as role-switchable panes, beginning with a persistent search pane informed by `File_Search_APP`. No search implementation has started yet.
+- 2026-09-13: Completed Phases 9 and 10: persistent pane roles plus the directory/search switching shell. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 73 Rust tests (1 ignored benchmark), and a production build.
 
 ## Commit log
 
@@ -157,3 +160,6 @@ Each slice gets its own implementation commit followed by verification and a han
 - `a5ca2af` — `docs: record shortcut and tray polish`
 - `6d96ace` — `feat: add async workbench transfers`
 - `91174a9` — `docs: record async transfer milestone`
+- `bb2ec10` — `docs: plan role-switchable search panes`
+- `7fad931` — `feat: add persistent pane roles`
+- `b02616d` — `feat: add search pane shell`
