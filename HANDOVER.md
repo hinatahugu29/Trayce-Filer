@@ -42,7 +42,7 @@ results available as normal copy/move/preview/tray sources.
 - [x] Phase 12 — share selection, preview, tray, drag, copy, and move behavior with search results
 - [x] Phase 13 — persist and restore search scope, query, options, and result presentation
 - [x] Phase 14 — bring over advanced query/sort/history behavior from `File_Search_APP` selectively
-- [ ] Search follow-up — profile real-device performance before deciding on parallel scan and pause/resume
+- [ ] Search follow-up — profile real-device performance before deciding whether parallel directory walking is beneficial
 
 ## Current status
 
@@ -71,15 +71,16 @@ results available as normal copy/move/preview/tray sources.
 - Phase 9 implemented: pane roles and dormant search conditions now round-trip through session state. Sessions from older builds default safely to directory panes, and search results themselves are intentionally not serialized.
 - Phase 10 implemented: a directory pane can switch to a clearly identified search shell and back while retaining its directory context and draft query. Split, close, hover targeting, and drop rejection have explicit search-pane behavior.
 - Phase 11 implemented: search panes recursively scan an explicit root on a background thread, stream matching metadata in bounded batches, support cancellation/restart, and ignore events from superseded searches by client-generated request ID.
-- The MVP uses case-insensitive AND terms across names and, by default, full paths. Empty queries are rejected, directory links are not followed, unreadable locations are counted without aborting the scan, and results stop at a 50,000-item safety cap.
+- The original MVP searched per query; it has since been replaced by a persistent Rust-side cache and dedicated search worker modeled on `File_Search_APP`.
 - Phase 12 implemented: search results now use the shared virtualized file list with absolute-path identity, so same-named files in different directories remain independently selectable. Results support range/multi-selection, keyboard navigation, open/reveal, preview, tray toggling, configurable copy/cut/path-copy shortcuts, sorting, and native multi-path drag to normal panes or other applications.
 - Double-clicking a result folder converts that search pane back to a directory pane at the chosen folder while retaining its dormant search conditions. Copying or dragging to a directory pane uses the existing transfer pipeline; cutting then pasting uses the existing cross-window clipboard move path.
 - Phase 13 implemented: search scope, query, path matching, sort key/direction, directory-first preference, and preview visibility persist per pane. Restored panes register event listeners before automatically rerunning saved non-empty searches, so fast searches cannot lose their first events.
 - Search result columns now collapse by available pane width, preserving the name/source-path column when a search pane sits beside a destination pane.
 - Phase 14 implemented selectively: spaces are AND, `|` is OR, and a leading `!` or `-` excludes a term. Semicolon/full-width-semicolon separated roots are searched together, duplicate roots are collapsed, and each pane keeps ten deduplicated recent queries.
-- Parallel scanning and pause/resume remain a measured follow-up. Cancellation is already available; concurrency should be added only if real-device profiling shows that filesystem latency justifies the extra pressure and ordering complexity.
-- Search interaction was revised after user feedback to match `File_Search_APP`: entering the search role immediately starts one background inventory pass, while editing the query filters the accumulated entries in memory on every keystroke. Enter is no longer required to begin a search; it only records the current query in history.
-- Changing roots or pressing reload rebuilds the inventory. While the inventory is still growing, the current query is reapplied to every arriving batch. The existing 50,000-entry cap currently also caps this in-WebView inventory and must be revisited if real-device searches regularly exceed it.
+- Parallel directory walking remains a measured follow-up. Cancellation, pause, and resume are implemented; concurrency should be added only if real-device profiling shows that filesystem latency justifies the extra pressure.
+- Search interaction now follows `File_Search_APP` internally as well as visibly: entering the search role starts a background inventory pass, Rust retains all cached entries plus pre-normalized name/path strings, and editing the query submits asynchronous filter requests to a dedicated worker. Enter is not required; it only records query history.
+- The worker drains queued requests and computes only the latest pending condition. The WebView accepts only its latest request ID, receives at most 500 matching entries, and no longer owns the full inventory. Scan-driven refreshes are throttled to 150/300/500 ms as the cache grows.
+- Changing roots or pressing reload creates a fresh cache and worker. During pause, cached data remains searchable; resume continues walking from the same point.
 
 ## Key integration points
 
@@ -158,6 +159,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Completed Phase 13 search-session restoration and narrow-pane presentation. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 77 Rust tests (1 ignored benchmark), and a production build.
 - 2026-09-13: Completed the selected Phase 14 advanced-search set: AND/OR/NOT, multiple roots, duplicate-root suppression, and per-pane query history. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 79 Rust tests (1 ignored benchmark), and a production build.
 - 2026-09-13: Reworked search initiation around a scan-on-pane-open, filter-as-you-type model. Added shared frontend query semantics and regression tests; verification passed with 0 Svelte diagnostics, 51 frontend tests, 79 Rust tests (1 ignored benchmark), and a production build.
+- 2026-09-13: Replaced the temporary WebView-side inventory with a `File_Search_APP`-style Rust cache and coalescing search worker. Added throttled scan refresh, 500-result IPC limit, pause/resume, and stale request rejection. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 77 Rust tests (1 ignored benchmark), and a production build.
 
 ## Commit log
 
@@ -188,3 +190,5 @@ Each slice gets its own implementation commit followed by verification and a han
 - `cee3f60` — `feat: add advanced pane search`
 - `3fcc742` — `docs: record advanced search milestone`
 - `9c77101` — `feat: filter search panes as you type`
+- `57be84c` — `docs: record live search interaction`
+- `0b6b416` — `refactor: move live search into Rust worker`
