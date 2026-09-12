@@ -146,9 +146,6 @@ fn scan_roots<F>(
 where
   F: FnMut(Vec<SearchEntry>, usize),
 {
-  if query.trim().is_empty() {
-    return Err("検索語を入力してください".into());
-  }
   if roots.is_empty() {
     return Err("検索対象のフォルダを指定してください".into());
   }

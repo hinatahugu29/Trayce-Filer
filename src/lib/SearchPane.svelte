@@ -7,6 +7,7 @@
   import FileList from './FileList.svelte'
   import Preview from './Preview.svelte'
   import { splitPath } from './api'
+  import { matchesSearchQuery } from './searchQuery'
   import { matchAction } from './shortcuts'
 
   export let directoryPath: string
@@ -31,7 +32,7 @@
   $: scopes = search.scopePaths.length ? search.scopePaths : [directoryPath]
   $: scope = scopes.join('; ')
   $: scopeLabel = scopes.length > 1 ? `${scopes.length}か所` : splitPath(scopes[0]).tail || scopes[0]
-  let results: api.SearchEntry[] = []
+  let indexedEntries: api.SearchEntry[] = []
   let selection: string[] = []
   let showPreview = search.showPreview ?? settings.showPreview
   let sort: api.SortSpec = {
@@ -54,10 +55,13 @@
   function resultParent(entry: api.Entry): string {
     return splitPath(resultPath(entry)).lead
   }
+  $: results = orderedResults(
+    indexedEntries.filter((entry) => matchesSearchQuery(entry, search.query, search.matchPath))
+  )
   let requestId: string | null = null
   let running = false
   let scanned = 0
-  let status = '検索語を入力してください'
+  let status = '検索対象を読み込んでいます…'
   let unlistenBatch: UnlistenFn | null = null
   let unlistenDone: UnlistenFn | null = null
 
@@ -66,7 +70,7 @@
   }
 
   export async function reload() {
-    if (search.query.trim()) await runSearch()
+    await runIndex()
   }
 
   export async function acceptDrop(_paths: string[]) {
@@ -83,6 +87,7 @@
       .map((path) => path.trim())
       .filter(Boolean)
     onSearchChange({ ...search, scopePaths })
+    if (scopePaths.length) runIndex(scopePaths)
   }
 
   function toggleMatchPath() {
@@ -98,24 +103,29 @@
     return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
   }
 
-  async function runSearch() {
+  function rememberQuery() {
     const query = search.query.trim()
-    const roots = search.scopePaths.filter((path) => path.trim())
-    if (!query || roots.length === 0) {
-      status = !query ? '検索語を入力してください' : '検索対象を入力してください'
+    if (!query) return
+    const recentQueries = [query, ...(search.recentQueries ?? []).filter((item) => item.toLocaleLowerCase() !== query.toLocaleLowerCase())].slice(0, 10)
+    onSearchChange({ ...search, query, recentQueries })
+  }
+
+  async function runIndex(overrideRoots?: string[]) {
+    const roots = (overrideRoots ?? search.scopePaths).filter((path) => path.trim())
+    if (roots.length === 0) {
+      status = '検索対象を入力してください'
       return
     }
     if (requestId) await api.cancelSearch(requestId).catch(() => {})
     const id = nextRequestId()
     requestId = id
-    const recentQueries = [query, ...(search.recentQueries ?? []).filter((item) => item.toLocaleLowerCase() !== query.toLocaleLowerCase())].slice(0, 10)
-    onSearchChange({ ...search, query, recentQueries })
-    results = []
+    indexedEntries = []
     scanned = 0
     running = true
-    status = '検索しています…'
+    status = 'ファイルを読み込んでいます…'
     try {
-      await api.startSearch(id, roots, query, search.matchPath)
+      // 空の検索語で全項目を一度だけ索引化し、入力中の絞り込みはメモリ上で行う。
+      await api.startSearch(id, roots, '', true)
     } catch (error) {
       if (requestId !== id) return
       running = false
@@ -151,7 +161,7 @@
       sortDescending: sort.descending,
       dirsFirst: sort.dirsFirst,
     })
-    results = orderedResults(results)
+    indexedEntries = [...indexedEntries]
   }
 
   async function launch(_entry: api.Entry, path: string) {
@@ -190,9 +200,9 @@
   onMount(async () => {
     unlistenBatch = await listen<api.SearchBatchEvent>(api.SEARCH_BATCH, ({ payload }) => {
       if (payload.id !== requestId) return
-      results = orderedResults([...results, ...payload.entries])
+      indexedEntries = [...indexedEntries, ...payload.entries]
       scanned = payload.scanned
-      status = `${scanned.toLocaleString()}件を確認中`
+      status = `${scanned.toLocaleString()}件を読み込み中`
     })
     unlistenDone = await listen<api.SearchDoneEvent>(api.SEARCH_DONE, ({ payload }) => {
       if (payload.id !== requestId) return
@@ -201,15 +211,15 @@
       if (payload.error) {
         status = payload.error
       } else if (payload.cancelled) {
-        status = `停止しました — ${results.length.toLocaleString()}件`
+        status = `停止しました — ${indexedEntries.length.toLocaleString()}件を読み込み済み`
       } else {
         const warning = payload.warningCount ? `・読めない場所 ${payload.warningCount}件` : ''
         const limited = payload.truncated ? '・上限に達しました' : ''
-        status = `${payload.matched.toLocaleString()}件・${payload.scanned.toLocaleString()}件を確認${warning}${limited}`
+        status = `${payload.scanned.toLocaleString()}件を読み込み済み${warning}${limited}`
       }
     })
-    // 保存するのは条件だけ。復元時はリスナー準備後に新しい結果を作り直す。
-    if (search.query.trim() && search.scopePaths.some((path) => path.trim())) await runSearch()
+    // ペインへ切り替えた時点で走査を開始する。検索語は開始条件にしない。
+    if (search.scopePaths.some((path) => path.trim())) await runIndex()
   })
 
   onDestroy(() => {
@@ -294,8 +304,9 @@
       spellcheck="false"
       aria-label="検索語"
       on:input={(event) => updateQuery(event.currentTarget.value)}
+      on:blur={rememberQuery}
       on:keydown={(event) => {
-        if (event.key === 'Enter') runSearch()
+        if (event.key === 'Enter') rememberQuery()
         if (event.key === 'Escape' && running) stopSearch()
       }}
     />
@@ -303,7 +314,7 @@
     {#if running}
       <button type="button" class="stop" on:click={stopSearch}>停止</button>
     {:else}
-      <button type="button" disabled={!search.query.trim() || !scope.trim()} on:click={runSearch}>検索</button>
+      <button type="button" disabled={!scope.trim()} title="検索対象をもう一度読み込む" on:click={() => runIndex()}>再読込</button>
     {/if}
     {#if (search.recentQueries?.length ?? 0) > 0}
       <select
@@ -323,13 +334,13 @@
 
   <div class="syntax"><span>空白: AND</span><span>|: OR</span><span>! または -: 除外</span></div>
 
-  <div class="status" class:searching={running}>{status}</div>
+  <div class="status" class:searching={running}>{status} · {results.length.toLocaleString()}件表示</div>
   {#if results.length === 0}
     <div class="empty">
       <span class="mark">⌕</span>
-      <strong>{running ? '検索中…' : '検索ペイン'}</strong>
-      <p>{running ? `${scanned.toLocaleString()}件を確認しました` : '名前やパスを横断して探します。'}</p>
-      <small>Enterで検索、検索中はEscapeで停止</small>
+      <strong>{running ? '読み込み中…' : '一致する項目はありません'}</strong>
+      <p>{running ? `${scanned.toLocaleString()}件を読み込みました` : '検索語を変えると即座に絞り込みます。'}</p>
+      <small>入力中にリアルタイム絞り込み、Escapeで走査を停止</small>
     </div>
   {:else}
     <div class="result-area">
