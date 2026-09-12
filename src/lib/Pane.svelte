@@ -245,10 +245,10 @@
     }
   }
 
-  async function transferTray(moveFiles: boolean) {
-    if (!listing || !trayItems.length || transferId !== null) return
+  async function transferTray(paths: string[], moveFiles: boolean) {
+    if (!listing || !paths.length || transferId !== null) return
     trayTransfer = { moveFiles }
-    await runTransfer(trayItems, listing.path, moveFiles)
+    await runTransfer(paths, listing.path, moveFiles)
     if (transferId === null) trayTransfer = null
   }
 

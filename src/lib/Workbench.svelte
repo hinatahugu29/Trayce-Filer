@@ -110,17 +110,17 @@
     }
   }
 
-  function handleTrayDragStart(win: WindowInfo, ev: DragEvent) {
+  function handleTrayDragStart(win: WindowInfo, paths: string[], ev: DragEvent) {
     draggingItem = {
-      paths: [...win.tray_paths],
+      paths: [...paths],
       srcWindowLabel: win.label,
-      name: `${win.tray_paths.length}件のトレイ`,
+      name: paths.length === 1 ? splitPath(paths[0]).tail || paths[0] : `${paths.length}件のトレイ`,
       fromTray: true,
     }
     isCopyMode = !ev.shiftKey
     if (ev.dataTransfer) {
       ev.dataTransfer.effectAllowed = 'copyMove'
-      ev.dataTransfer.setData('text/plain', win.tray_paths.join('\n'))
+      ev.dataTransfer.setData('text/plain', paths.join('\n'))
     }
   }
 
@@ -166,9 +166,13 @@
       onNote(`「${draggingItem.name}」を ${actionName}しました`)
 
       if (moveFiles && draggingItem.fromTray) {
-        await api.setWindowTray(srcWindowLabel, [])
         const source = windows.find((w) => w.label === srcWindowLabel)
-        if (source) source.tray_paths = []
+        const moved = new Set(srcPaths.map(api.pathIdentity))
+        const remaining = source
+          ? source.tray_paths.filter((path) => !moved.has(api.pathIdentity(path)))
+          : []
+        await api.setWindowTray(srcWindowLabel, remaining)
+        if (source) source.tray_paths = remaining
         windows = windows
       }
 
@@ -324,19 +328,28 @@
       </div>
       <div
         class="collection-items"
-        draggable="true"
-        on:dragstart={(e) => handleTrayDragStart(traySource, e)}
-        on:dragend={handleDragEnd}
-        role="button"
-        tabindex="0"
-        title="まとめて送り先カードへドラッグ"
       >
         {#each traySource.tray_paths.slice(0, 5) as path (api.pathIdentity(path))}
-          <span class="collection-pill">{splitPath(path).tail || path}</span>
+          <button
+            type="button"
+            class="collection-pill"
+            draggable="true"
+            on:dragstart={(e) => handleTrayDragStart(traySource, [path], e)}
+            on:dragend={handleDragEnd}
+            title="この項目だけ送り先カードへドラッグ"
+          >{splitPath(path).tail || path}</button>
         {/each}
         {#if traySource.tray_paths.length > 5}
           <span class="collection-more">+{traySource.tray_paths.length - 5}</span>
         {/if}
+        <button
+          type="button"
+          class="drag-all"
+          draggable="true"
+          on:dragstart={(e) => handleTrayDragStart(traySource, traySource.tray_paths, e)}
+          on:dragend={handleDragEnd}
+          title="トレイ全体を送り先カードへドラッグ"
+        >全件を運ぶ ↗</button>
       </div>
     </div>
   {/if}
@@ -387,8 +400,9 @@
   .collection-copy small { color: #75988d; font-size: 9.5px; }
   .collection-items { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; overflow: hidden; cursor: grab; }
   .collection-items:active { cursor: grabbing; }
-  .collection-pill { max-width: 150px; padding: 4px 7px; border: 1px solid #376e5c; border-radius: 12px; background: #203b33; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+  .collection-pill { max-width: 150px; padding: 4px 7px; border: 1px solid #376e5c; border-radius: 12px; background: #203b33; color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; font-size: 10px; cursor: grab; }
   .collection-more { color: #69c6a8; font-size: 10px; }
+  .drag-all { margin-left: auto; flex: none; padding: 4px 8px; border: 0; border-radius: 4px; background: #2a594a; color: #d9f5eb; font: inherit; font-size: 10px; cursor: grab; }
 
   .cards-viewport {
     flex: 1;

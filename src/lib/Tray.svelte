@@ -7,11 +7,25 @@
   export let onNavigate: (path: string) => void
   export let onRemove: (path: string) => void = () => {}
   export let onClear: () => void = () => {}
-  export let onTransfer: (moveFiles: boolean) => void = () => {}
+  export let onTransfer: (paths: string[], moveFiles: boolean) => void = () => {}
   export let transferBusy = false
 
   let exist: boolean[] = []
   let refreshToken = 0
+  let selectedKeys = new Set<string>()
+  let anchor = 0
+  let lastItemSignature = ''
+
+  $: itemSignature = items.map(api.pathIdentity).join('\n')
+  $: if (itemSignature !== lastItemSignature) {
+    lastItemSignature = itemSignature
+    const valid = new Set(items.map(api.pathIdentity))
+    selectedKeys = new Set([...selectedKeys].filter((key) => valid.has(key)))
+    anchor = Math.min(anchor, Math.max(0, items.length - 1))
+  }
+
+  $: selectedPaths = items.filter((path) => selectedKeys.has(api.pathIdentity(path)))
+  $: transferPaths = selectedPaths.length ? selectedPaths : items
 
   async function refresh() {
     const token = ++refreshToken
@@ -26,6 +40,30 @@
     const { lead } = splitPath(path)
     onNavigate(lead || path)
   }
+
+  function selectItem(path: string, index: number, ev: MouseEvent) {
+    const key = api.pathIdentity(path)
+    if (ev.shiftKey) {
+      const [from, to] = anchor <= index ? [anchor, index] : [index, anchor]
+      selectedKeys = new Set(items.slice(from, to + 1).map(api.pathIdentity))
+    } else if (ev.ctrlKey) {
+      selectedKeys.has(key) ? selectedKeys.delete(key) : selectedKeys.add(key)
+      selectedKeys = new Set(selectedKeys)
+      anchor = index
+    } else {
+      selectedKeys = new Set([key])
+      anchor = index
+    }
+  }
+
+  function onKeyDown(ev: KeyboardEvent) {
+    if (ev.ctrlKey && ev.key.toLowerCase() === 'a') {
+      ev.preventDefault()
+      selectedKeys = new Set(items.map(api.pathIdentity))
+    } else if (ev.key === 'Escape') {
+      selectedKeys = new Set()
+    }
+  }
 </script>
 
 <div class="tray">
@@ -38,23 +76,35 @@
 
   {#if items.length}
     <div class="actions">
-      <button type="button" disabled={transferBusy} on:click={() => onTransfer(false)}>ここへコピー</button>
-      <button type="button" disabled={transferBusy} on:click={() => onTransfer(true)}>ここへ移動</button>
+      <button type="button" disabled={transferBusy} on:click={() => onTransfer(transferPaths, false)}>
+        {selectedPaths.length ? `選択 ${selectedPaths.length}件をコピー` : 'すべてコピー'}
+      </button>
+      <button type="button" disabled={transferBusy} on:click={() => onTransfer(transferPaths, true)}>
+        {selectedPaths.length ? `選択 ${selectedPaths.length}件を移動` : 'すべて移動'}
+      </button>
     </div>
   {/if}
 
-  <div class="items">
+  <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
+  <div class="items" tabindex="0" role="listbox" aria-label="収集トレイ" on:keydown={onKeyDown}>
     {#each items as path, i (api.pathIdentity(path))}
       {@const parts = splitPath(path)}
-      <div class="item" class:missing={exist[i] === false} title={path}>
-        <button class="open" type="button" on:dblclick={() => reveal(path)}>
+      <div
+        class="item"
+        class:selected={selectedKeys.has(api.pathIdentity(path))}
+        class:missing={exist[i] === false}
+        title={path}
+        role="option"
+        aria-selected={selectedKeys.has(api.pathIdentity(path))}
+      >
+        <button class="open" type="button" on:click={(e) => selectItem(path, i, e)} on:dblclick={() => reveal(path)}>
           <span class="icon">{exist[i] === false ? '⚠' : '◈'}</span>
           <span class="text">
             <strong>{parts.tail || path}</strong>
             <small>{exist[i] === false ? '見つかりません' : parts.lead}</small>
           </span>
         </button>
-        <button class="remove" type="button" title="トレイから外す" on:click={() => onRemove(path)}>×</button>
+        <button class="remove" type="button" title="トレイから外す" on:click|stopPropagation={() => onRemove(path)}>×</button>
       </div>
     {/each}
   </div>
@@ -73,6 +123,7 @@
   .actions button:disabled { opacity: .45; cursor: default; }
   .item { display: flex; align-items: center; border-radius: 4px; color: #ccc; }
   .item:hover { background: #252b31; }
+  .item.selected { background: #294b55; box-shadow: inset 2px 0 #67c8da; }
   .item.missing { opacity: .58; }
   .open { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; padding: 6px; text-align: left; }
   .icon { flex: none; color: #65c5a5; }
