@@ -95,4 +95,4 @@ The feature is intentionally an evolution rather than a direct copy:
 - `a98ba0d` — `feat: support partial tray operations`
 - `94d0b99` — `docs: record partial tray milestone`
 - `c59745b` — `feat: make hover controls configurable`
-- Pending: Phase 7 tray safety polish.
+- `4e9e910` — `feat: clarify tray transfer targets`
