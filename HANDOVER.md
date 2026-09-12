@@ -84,5 +84,5 @@ The feature is intentionally an evolution rather than a direct copy:
 - `3839536` — `feat: add hover-target left-hand controls`
 - `e8ebb3c` — `docs: record hover-control milestone`
 - `f000175` — `fix: exit after closing the last filer window`
-- Pending: Phase 5 partial tray operation commit.
+- `a98ba0d` — `feat: support partial tray operations`
 - `3839536` — `feat: add hover-target left-hand controls`
