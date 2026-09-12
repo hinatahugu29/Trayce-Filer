@@ -727,6 +727,7 @@
           showHidden={sort.showHidden}
           {trayItems}
           onTrayRemove={onTrayToggle}
+          {onTrayRemoveMany}
           {onTrayClear}
           onTrayTransfer={transferTray}
           trayTransferBusy={transferId !== null}

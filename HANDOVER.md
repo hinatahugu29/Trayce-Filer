@@ -28,6 +28,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - [x] Phase 4 — initial left-hand/hover interaction set; further refinement follows real use
 - [x] Phase 5 — partial tray selection, partial transfer, and per-item Workbench drag
 - [x] Phase 6 — integrate hover/left-hand controls into configurable shortcut infrastructure
+- [x] Phase 7 — clarify tray destination and add selected-only removal
 - [x] Lifecycle fix — exit the process when the last normal Filer window closes
 
 ## Current status
@@ -48,6 +49,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - With no explicit tray selection, transfer actions retain the convenient all-items behavior. Individual successful moves remove only that item from the source tray.
 - Phase 6 implemented: hover controls now use the same configurable shortcut definitions, settings UI, live footer labels, and duplicate-key detection as the rest of the app.
 - Space key events are normalized to the readable `Space` setting name and covered by regression tests.
+- Phase 7 implemented: each pane's tray names its receiving folder and selected entries can be removed without affecting files or unselected tray entries.
 - Lifecycle fix implemented: the hidden overlay no longer keeps `app.exe` alive after the last normal Filer window closes. Closing one of several Filer windows still leaves the process running.
 
 ## Key integration points
@@ -77,6 +79,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - 2026-09-12: Completed the initial Phase 4 hover-key layer. Svelte diagnostics, 48 frontend tests, 71 Rust tests (1 ignored benchmark), production build, and diff checks passed.
 - 2026-09-12: Completed Phase 5 partial tray operations and individual Workbench drag. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 72 Rust tests (1 ignored benchmark), and a production build.
 - 2026-09-12: Completed Phase 6 configurable hover controls and Space normalization. Full frontend/Rust/build verification passed.
+- 2026-09-12: Completed Phase 7 destination clarity and selected-only tray removal. Full verification passed.
 - 2026-09-12: Fixed application shutdown semantics after real-device testing revealed that the hidden reusable overlay kept the release executable locked.
 
 ## Commit log
@@ -91,4 +94,5 @@ The feature is intentionally an evolution rather than a direct copy:
 - `d351b39` — `docs: record last-window exit fix`
 - `a98ba0d` — `feat: support partial tray operations`
 - `94d0b99` — `docs: record partial tray milestone`
-- Pending: Phase 6 configurable shortcut integration.
+- `c59745b` — `feat: make hover controls configurable`
+- Pending: Phase 7 tray safety polish.

@@ -6,9 +6,11 @@
   export let items: string[] = []
   export let onNavigate: (path: string) => void
   export let onRemove: (path: string) => void = () => {}
+  export let onRemoveMany: (paths: string[]) => void = () => {}
   export let onClear: () => void = () => {}
   export let onTransfer: (paths: string[], moveFiles: boolean) => void = () => {}
   export let transferBusy = false
+  export let destinationPath = ''
 
   let exist: boolean[] = []
   let refreshToken = 0
@@ -75,6 +77,10 @@
   </div>
 
   {#if items.length}
+    <div class="destination" title={destinationPath}>
+      <span>送り先</span>
+      <strong>{splitPath(destinationPath).tail || destinationPath}</strong>
+    </div>
     <div class="actions">
       <button type="button" disabled={transferBusy} on:click={() => onTransfer(transferPaths, false)}>
         {selectedPaths.length ? `選択 ${selectedPaths.length}件をコピー` : 'すべてコピー'}
@@ -83,6 +89,11 @@
         {selectedPaths.length ? `選択 ${selectedPaths.length}件を移動` : 'すべて移動'}
       </button>
     </div>
+    {#if selectedPaths.length}
+      <button class="remove-selected" type="button" on:click={() => onRemoveMany(selectedPaths)}>
+        選択 {selectedPaths.length}件をトレイから外す
+      </button>
+    {/if}
   {/if}
 
   <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
@@ -121,6 +132,10 @@
   .actions button { flex: 1; padding: 5px 3px; border: 1px solid #345266; border-radius: 3px; color: #b9d9ee; background: #1d303c; font-size: 10px; }
   .actions button:hover:not(:disabled) { background: #25475a; }
   .actions button:disabled { opacity: .45; cursor: default; }
+  .destination { display: flex; gap: 6px; align-items: center; padding: 5px 8px 0; color: #67747c; font-size: 9.5px; }
+  .destination strong { color: #9bb9c8; font-size: 10.5px; font-weight: 500; }
+  .remove-selected { margin: 0 7px 6px; padding: 3px; border: 1px solid #4c3b3b; border-radius: 3px; color: #bd8f8f; font-size: 9.5px; }
+  .remove-selected:hover { background: #382727; color: #efb2b2; }
   .item { display: flex; align-items: center; border-radius: 4px; color: #ccc; }
   .item:hover { background: #252b31; }
   .item.selected { background: #294b55; box-shadow: inset 2px 0 #67c8da; }
