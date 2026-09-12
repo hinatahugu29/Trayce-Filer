@@ -74,4 +74,4 @@ The feature is intentionally an evolution rather than a direct copy:
 - `f9ec3a7` — `feat: add tab-local collection tray`
 - `fb97296` — `feat: transfer collected tray items`
 - `307a746` — `feat: send collection tray from workbench`
-- Pending: Phase 4 hover-target shortcut commit.
+- `3839536` — `feat: add hover-target left-hand controls`
