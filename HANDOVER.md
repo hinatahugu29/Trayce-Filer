@@ -40,7 +40,7 @@ results available as normal copy/move/preview/tray sources.
 - [x] Phase 10 — add a search-pane shell and role-switching UI without changing directory-pane behavior
 - [x] Phase 11 — implement cancellable, streaming filename search with explicit scope
 - [x] Phase 12 — share selection, preview, tray, drag, copy, and move behavior with search results
-- [ ] Phase 13 — persist and restore search scope, query, options, and result presentation
+- [x] Phase 13 — persist and restore search scope, query, options, and result presentation
 - [ ] Phase 14 — bring over advanced query/sort/history behavior from `File_Search_APP` selectively
 
 ## Current status
@@ -73,6 +73,8 @@ results available as normal copy/move/preview/tray sources.
 - The MVP uses case-insensitive AND terms across names and, by default, full paths. Empty queries are rejected, directory links are not followed, unreadable locations are counted without aborting the scan, and results stop at a 50,000-item safety cap.
 - Phase 12 implemented: search results now use the shared virtualized file list with absolute-path identity, so same-named files in different directories remain independently selectable. Results support range/multi-selection, keyboard navigation, open/reveal, preview, tray toggling, configurable copy/cut/path-copy shortcuts, sorting, and native multi-path drag to normal panes or other applications.
 - Double-clicking a result folder converts that search pane back to a directory pane at the chosen folder while retaining its dormant search conditions. Copying or dragging to a directory pane uses the existing transfer pipeline; cutting then pasting uses the existing cross-window clipboard move path.
+- Phase 13 implemented: search scope, query, path matching, sort key/direction, directory-first preference, and preview visibility persist per pane. Restored panes register event listeners before automatically rerunning saved non-empty searches, so fast searches cannot lose their first events.
+- Search result columns now collapse by available pane width, preserving the name/source-path column when a search pane sits beside a destination pane.
 
 ## Key integration points
 
@@ -148,6 +150,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Completed Phases 9 and 10: persistent pane roles plus the directory/search switching shell. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 73 Rust tests (1 ignored benchmark), and a production build.
 - 2026-09-13: Completed Phase 11 background search and incremental result display. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 76 Rust tests (1 ignored benchmark), and a production build.
 - 2026-09-13: Completed Phase 12 actionable search results and generalized file-list path identity for virtual listings. Full verification passed with the same 48 frontend and 76 Rust tests plus production build.
+- 2026-09-13: Completed Phase 13 search-session restoration and narrow-pane presentation. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 77 Rust tests (1 ignored benchmark), and a production build.
 
 ## Commit log
 
@@ -172,3 +175,5 @@ Each slice gets its own implementation commit followed by verification and a han
 - `a59751e` — `feat: stream search pane results`
 - `f849e8d` — `docs: record search pane MVP`
 - `fd36884` — `feat: make search results actionable`
+- `3b3dca0` — `docs: record actionable search results`
+- `28ea183` — `feat: restore search pane sessions`
