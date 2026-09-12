@@ -52,6 +52,16 @@
     if (expanded) await load()
   }
 
+  /**
+   * 名前側も一方向の「開く」ではなく、同じ行をもう一度押せば畳めるようにする。
+   * 移動と開閉を同時に行うが、userToggled を立てるため現在地の自動展開に
+   * 直後から押し戻されることはない。
+   */
+  async function activate() {
+    onNavigate(path)
+    await toggle()
+  }
+
   // 現在地までの経路にいるなら勝手に開く。
   // 「あの辺にあったはず」を辿れるようにするのがツリーの役目なので、
   // 開いている場所が閉じたままだと意味がない。
@@ -94,8 +104,8 @@
     aria-selected={isCurrent}
     aria-expanded={expanded}
     tabindex="-1"
-    on:click={() => onNavigate(path)}
-    on:keydown={(e) => e.key === 'Enter' && onNavigate(path)}
+    on:click={activate}
+    on:keydown={(e) => e.key === 'Enter' && activate()}
   >
     <button
       class="twisty"
