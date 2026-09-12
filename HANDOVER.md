@@ -81,6 +81,7 @@ results available as normal copy/move/preview/tray sources.
 - Search interaction now follows `File_Search_APP` internally as well as visibly: entering the search role starts a background inventory pass, Rust retains all cached entries plus pre-normalized name/path strings, and editing the query submits asynchronous filter requests to a dedicated worker. Enter is not required; it only records query history.
 - The worker drains queued requests and computes only the latest pending condition. The WebView accepts only its latest request ID, receives at most 500 matching entries, and no longer owns the full inventory. Scan-driven refreshes are throttled to 150/300/500 ms as the cache grows.
 - Changing roots or pressing reload creates a fresh cache and worker. During pause, cached data remains searchable; resume continues walking from the same point.
+- Pane creation now exposes both meanings explicitly: `N` duplicates the current directory as a normal pane, `Shift+N` preserves the source pane and adds a search pane scoped to its current directory, and the existing `⌕` action converts the current pane itself to search.
 
 ## Key integration points
 
@@ -160,6 +161,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Completed the selected Phase 14 advanced-search set: AND/OR/NOT, multiple roots, duplicate-root suppression, and per-pane query history. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 79 Rust tests (1 ignored benchmark), and a production build.
 - 2026-09-13: Reworked search initiation around a scan-on-pane-open, filter-as-you-type model. Added shared frontend query semantics and regression tests; verification passed with 0 Svelte diagnostics, 51 frontend tests, 79 Rust tests (1 ignored benchmark), and a production build.
 - 2026-09-13: Replaced the temporary WebView-side inventory with a `File_Search_APP`-style Rust cache and coalescing search worker. Added throttled scan refresh, 500-result IPC limit, pause/resume, and stale request rejection. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 77 Rust tests (1 ignored benchmark), and a production build.
+- 2026-09-13: Added direct search-pane splitting without replacing the source pane. The toolbar action and configurable `Shift+N` shortcut work from both directory and search panes. Full verification passed.
 
 ## Commit log
 
@@ -192,3 +194,5 @@ Each slice gets its own implementation commit followed by verification and a han
 - `9c77101` — `feat: filter search panes as you type`
 - `57be84c` — `docs: record live search interaction`
 - `0b6b416` — `refactor: move live search into Rust worker`
+- `6e9154d` — `docs: record Rust search worker architecture`
+- `48a89a4` — `feat: split directly into search panes`
