@@ -14,6 +14,8 @@
   export let trayItems: string[] = []
   export let onTrayRemove: (path: string) => void = () => {}
   export let onTrayClear: () => void = () => {}
+  export let onTrayTransfer: (moveFiles: boolean) => void = () => {}
+  export let trayTransferBusy = false
 
   /** どのタブを開くか。ペインごとに独立して覚える。 */
   export let tab: 'tree' | 'favorites' | 'history' | 'tray' = 'tree'
@@ -97,7 +99,14 @@
         onChanged={refresh}
       />
     {:else}
-      <Tray items={trayItems} {onNavigate} onRemove={onTrayRemove} onClear={onTrayClear} />
+      <Tray
+        items={trayItems}
+        {onNavigate}
+        onRemove={onTrayRemove}
+        onClear={onTrayClear}
+        onTransfer={onTrayTransfer}
+        transferBusy={trayTransferBusy}
+      />
     {/if}
   </div>
 </div>

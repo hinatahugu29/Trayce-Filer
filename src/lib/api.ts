@@ -136,6 +136,7 @@ export type DoneEvent = {
   created: number
   cancelled: boolean
   error: string | null
+  completedSources: string[]
 }
 
 /** 別スレッドでコピー/移動を始める。戻り値は中断に使う ID。 */

@@ -41,6 +41,8 @@ pub struct DoneEvent {
   pub created: usize,
   pub cancelled: bool,
   pub error: Option<String>,
+  /// 実際に転送を完了した入力元。トレイ等が試行ではなく実績で状態を更新するために返す。
+  pub completed_sources: Vec<String>,
 }
 
 /// コピー / 移動を始める。戻り値は中断に使う ID。
@@ -128,9 +130,13 @@ pub fn start_transfer(
       super::fs_ops::transfer_pub(&paths, &dest, move_files, &cancel, &mut on_progress);
 
     let cancelled = cancel.load(Ordering::Relaxed);
-    let (created, error) = match result {
+    let (created, error, completed_sources) = match result {
       Ok(pairs) => {
         let count = pairs.len();
+        let completed_sources = pairs
+          .iter()
+          .map(|(source, _)| source.to_string_lossy().to_string())
+          .collect();
         // 中断で0件だった場合、undo に積む意味が無い。
         if count > 0 {
           app.state::<crate::undo::UndoStack>().push(crate::undo::UndoAction::Transfer {
@@ -138,13 +144,16 @@ pub fn start_transfer(
             was_move: move_files,
           });
         }
-        (count, None)
+        (count, None, completed_sources)
       }
-      Err(e) => (0, Some(e)),
+      Err(e) => (0, Some(e), Vec::new()),
     };
 
     app.state::<Transfers>().running.lock().unwrap().remove(&id);
-    let _ = app.emit(TRANSFER_DONE, DoneEvent { id, dest, created, cancelled, error });
+    let _ = app.emit(
+      TRANSFER_DONE,
+      DoneEvent { id, dest, created, cancelled, error, completed_sources },
+    );
   });
 
   id

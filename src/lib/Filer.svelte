@@ -165,6 +165,14 @@
     note(`トレイから ${count} 件を解除`)
   }
 
+  function removeTrayItems(paths: string[]) {
+    const tab = activeTab
+    if (!tab || paths.length === 0) return
+    const removed = new Set(paths.map(api.pathIdentity))
+    tab.trayItems = tab.trayItems.filter((item) => !removed.has(api.pathIdentity(item)))
+    tabs = tabs
+  }
+
   function closePane(id: number) {
     const tab = activeTab
     if (!tab || tab.panes.length <= 1) return // 最後の1枚は残す
@@ -390,6 +398,7 @@
             trayItems={activeTab.trayItems}
             onTrayToggle={toggleTrayItem}
             onTrayClear={clearTray}
+            onTrayRemoveMany={removeTrayItems}
             onActivate={() => {
               activeTab.activeId = pane.id
               tabs = tabs

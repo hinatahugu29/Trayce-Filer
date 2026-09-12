@@ -37,6 +37,7 @@
   export let trayItems: string[] = []
   export let onTrayToggle: (path: string) => void = () => {}
   export let onTrayClear: () => void = () => {}
+  export let onTrayRemoveMany: (paths: string[]) => void = () => {}
 
   let listing: Listing | null = null
   let error: string | null = null
@@ -231,6 +232,7 @@
   /** 走らせている転送。null なら何も動いていない。 */
   let progress: api.ProgressEvent | null = null
   let transferId: number | null = null
+  let trayTransfer: { moveFiles: boolean } | null = null
 
   async function runTransfer(paths: string[], dest: string, moveFiles: boolean) {
     try {
@@ -238,6 +240,13 @@
     } catch (e) {
       error = String(e)
     }
+  }
+
+  async function transferTray(moveFiles: boolean) {
+    if (!listing || !trayItems.length || transferId !== null) return
+    trayTransfer = { moveFiles }
+    await runTransfer(trayItems, listing.path, moveFiles)
+    if (transferId === null) trayTransfer = null
   }
 
   /** 同じ列をもう一度押したら昇順/降順を反転する。 */
@@ -548,9 +557,13 @@
 
     unlistenDone = await listen<api.DoneEvent>(api.TRANSFER_DONE, async (ev) => {
       if (ev.payload.id !== transferId) return
-      const { cancelled, created, error: err } = ev.payload
+      const { cancelled, created, completedSources, error: err } = ev.payload
+      const completedTrayMove = trayTransfer?.moveFiles ? completedSources : []
       progress = null
       transferId = null
+      trayTransfer = null
+
+      if (completedTrayMove.length) onTrayRemoveMany(completedTrayMove)
 
       if (err) {
         error = err
@@ -684,6 +697,8 @@
           {trayItems}
           onTrayRemove={onTrayToggle}
           {onTrayClear}
+          onTrayTransfer={transferTray}
+          trayTransferBusy={transferId !== null}
         />
       </div>
       <!-- 幅の調整つまみ。掴んでいる間だけ pointermove を効かせる。 -->

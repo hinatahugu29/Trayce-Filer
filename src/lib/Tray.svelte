@@ -7,6 +7,8 @@
   export let onNavigate: (path: string) => void
   export let onRemove: (path: string) => void = () => {}
   export let onClear: () => void = () => {}
+  export let onTransfer: (moveFiles: boolean) => void = () => {}
+  export let transferBusy = false
 
   let exist: boolean[] = []
   let refreshToken = 0
@@ -34,6 +36,13 @@
     {/if}
   </div>
 
+  {#if items.length}
+    <div class="actions">
+      <button type="button" disabled={transferBusy} on:click={() => onTransfer(false)}>ここへコピー</button>
+      <button type="button" disabled={transferBusy} on:click={() => onTransfer(true)}>ここへ移動</button>
+    </div>
+  {/if}
+
   <div class="items">
     {#each items as path, i (api.pathIdentity(path))}
       {@const parts = splitPath(path)}
@@ -58,6 +67,10 @@
   button { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
   .summary button { color: #8fbce8; }
   .items { flex: 1; min-height: 0; overflow: auto; padding: 4px; }
+  .actions { display: flex; gap: 5px; padding: 6px 7px; border-bottom: 1px solid #2c2c2c; }
+  .actions button { flex: 1; padding: 5px 3px; border: 1px solid #345266; border-radius: 3px; color: #b9d9ee; background: #1d303c; font-size: 10px; }
+  .actions button:hover:not(:disabled) { background: #25475a; }
+  .actions button:disabled { opacity: .45; cursor: default; }
   .item { display: flex; align-items: center; border-radius: 4px; color: #ccc; }
   .item:hover { background: #252b31; }
   .item.missing { opacity: .58; }
