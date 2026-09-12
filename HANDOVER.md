@@ -26,6 +26,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - [x] Phase 2 — copy/move tray contents to the active pane using the existing transfer pipeline
 - [x] Phase 3 — expose the active tray in Workbench and support multi-item drop to a window
 - [x] Phase 4 — initial left-hand/hover interaction set; further refinement follows real use
+- [x] Lifecycle fix — exit the process when the last normal Filer window closes
 
 ## Current status
 
@@ -41,6 +42,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - Workbench tray drag defaults to copy; holding Shift while dropping moves and clears the successfully transferred tray.
 - Phase 4 initial interaction set implemented: the hovered pane becomes the left-hand keyboard target, with active-pane fallback and a distinct green target outline.
 - Unmodified `Q/W/F/N/Space` perform parent/close/favorite/split/preview on that target; text inputs and existing modified shortcuts retain priority.
+- Lifecycle fix implemented: the hidden overlay no longer keeps `app.exe` alive after the last normal Filer window closes. Closing one of several Filer windows still leaves the process running.
 
 ## Key integration points
 
@@ -67,6 +69,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - 2026-09-12: Completed Phase 3. Added cross-WebView tray synchronization, a Workbench collection strip, and safe-default multi-item card drops. Full automated verification passed.
 - 2026-09-12: Development app launched successfully. Runtime reported that the global hotkey was already owned by another running Filer instance; the new process itself reached the UI event loop and was then stopped.
 - 2026-09-12: Completed the initial Phase 4 hover-key layer. Svelte diagnostics, 48 frontend tests, 71 Rust tests (1 ignored benchmark), production build, and diff checks passed.
+- 2026-09-12: Fixed application shutdown semantics after real-device testing revealed that the hidden reusable overlay kept the release executable locked.
 
 ## Commit log
 
@@ -74,4 +77,7 @@ The feature is intentionally an evolution rather than a direct copy:
 - `f9ec3a7` — `feat: add tab-local collection tray`
 - `fb97296` — `feat: transfer collected tray items`
 - `307a746` — `feat: send collection tray from workbench`
+- `3839536` — `feat: add hover-target left-hand controls`
+- `e8ebb3c` — `docs: record hover-control milestone`
+- Pending: last-window process-exit fix.
 - `3839536` — `feat: add hover-target left-hand controls`

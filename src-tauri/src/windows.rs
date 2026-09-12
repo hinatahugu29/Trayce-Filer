@@ -58,6 +58,10 @@ impl Registry {
     self.windows.lock().unwrap().remove(label);
   }
 
+  fn is_empty(&self) -> bool {
+    self.windows.lock().unwrap().is_empty()
+  }
+
   /// 最後に前面へ来た順（新しい順）。
   /// 「さっき見てたやつ」を上に出すのが、散らかった窓を探す時の一番の手掛かりになる。
   fn sorted(&self) -> Vec<WindowInfo> {
@@ -171,7 +175,21 @@ pub fn register_window(app: AppHandle, label: String, path: String) {
 
 #[tauri::command]
 pub fn unregister_window(app: AppHandle, label: String) {
-  app.state::<Registry>().forget(&label);
+  // オーバーレイは通常窓として登録していない。これが閉じただけでアプリを
+  // 終了すると、Filer 本体が開いていても巻き添えになる。
+  if label == OVERLAY_LABEL {
+    return;
+  }
+
+  let registry = app.state::<Registry>();
+  registry.forget(&label);
+
+  // オーバーレイは再表示を速くするため hide で常駐する。そのため通常窓が
+  // 0枚になっても Tauri の自動終了が働かない。最後のFilerを閉じた時だけ
+  // 明示的にプロセスを終了し、release/app.exe のロックも確実に解放する。
+  if registry.is_empty() {
+    app.exit(0);
+  }
 }
 
 /// オーバーレイの表示/非表示を切り替える。ホットキーから呼ばれる。
@@ -297,6 +315,22 @@ mod tests {
     reg.record("filer-1", r"C:\a");
     reg.forget("filer-1");
     assert!(reg.sorted().is_empty());
+  }
+
+  #[test]
+  fn registry_is_empty_only_after_last_filer_is_forgotten() {
+    let reg = Registry::default();
+    assert!(reg.is_empty());
+
+    reg.record("main", r"C:\a");
+    reg.record("filer-1", r"C:\b");
+    assert!(!reg.is_empty());
+
+    reg.forget("main");
+    assert!(!reg.is_empty());
+
+    reg.forget("filer-1");
+    assert!(reg.is_empty());
   }
 
   #[test]
