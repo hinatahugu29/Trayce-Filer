@@ -83,6 +83,7 @@ results available as normal copy/move/preview/tray sources.
 - Changing roots or pressing reload creates a fresh cache and worker. During pause, cached data remains searchable; resume continues walking from the same point.
 - Pane creation now exposes both meanings explicitly: `N` duplicates the current directory as a normal pane, `Shift+N` preserves the source pane and adds a search pane scoped to its current directory, and the existing `⌕` action converts the current pane itself to search.
 - Sidebar tree folder names now toggle as well as navigate: the first click expands the folder and a second click collapses it. The separate disclosure arrow remains available for opening or closing without navigation.
+- The directory-pane sidebar can now be split into two stacked information views. Each section independently shows tree, favorites, history, or tray; the divider adjusts their height, either section can collapse back to the original single view, and the composition is restored per pane.
 
 ## Key integration points
 
@@ -164,6 +165,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Replaced the temporary WebView-side inventory with a `File_Search_APP`-style Rust cache and coalescing search worker. Added throttled scan refresh, 500-result IPC limit, pause/resume, and stale request rejection. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 77 Rust tests (1 ignored benchmark), and a production build.
 - 2026-09-13: Added direct search-pane splitting without replacing the source pane. The toolbar action and configurable `Shift+N` shortcut work from both directory and search panes. Full verification passed.
 - 2026-09-13: Made sidebar tree folder-name activation bidirectional. Repeated clicks now expand and collapse the folder while retaining normal navigation. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 77 Rust tests (1 ignored benchmark), production build, and diff checks.
+- 2026-09-13: Added an optional stacked sidebar. The normal four-tab header remains unchanged until the `↕` action is used; split sections use compact independent selectors and a draggable horizontal divider. Per-pane layout persistence is backward compatible. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 78 Rust tests (1 ignored benchmark), production build, and diff checks.
 
 ## Commit log
 
@@ -200,3 +202,5 @@ Each slice gets its own implementation commit followed by verification and a han
 - `48a89a4` — `feat: split directly into search panes`
 - `a7c3402` — `docs: record search split action`
 - `5829b11` — `fix: toggle tree folders from their names`
+- `8fb89aa` — `docs: record tree toggle behavior`
+- `19d4bc0` — `feat: split sidebar into stacked views`
