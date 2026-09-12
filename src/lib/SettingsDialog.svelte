@@ -93,7 +93,7 @@
     return new Set([...seen.entries()].filter(([, n]) => n > 1).map(([k]) => k))
   })()
 
-  const groups = ['移動', '編集', 'タブ', 'その他'] as const
+  const groups = ['移動', '編集', 'タブ', '左手操作', 'その他'] as const
   const sortKeys: { value: SortKey; label: string }[] = [
     { value: 'name', label: '名前' },
     { value: 'ext', label: '種類' },

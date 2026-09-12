@@ -25,6 +25,11 @@ export type ActionId =
   | 'zip'
   | 'copyPath'
   | 'settings'
+  | 'hoverParent'
+  | 'hoverClosePane'
+  | 'hoverFavorite'
+  | 'hoverSplitPane'
+  | 'hoverPreview'
 
 export type ActionDef = {
   id: ActionId
@@ -32,7 +37,7 @@ export type ActionDef = {
   /** 組み込みの既定キー。設定で上書きできる。 */
   fallback: string
   /** 設定画面での並び分け。 */
-  group: '移動' | '編集' | 'タブ' | 'その他'
+  group: '移動' | '編集' | 'タブ' | '左手操作' | 'その他'
 }
 
 export const ACTIONS: ActionDef[] = [
@@ -57,6 +62,12 @@ export const ACTIONS: ActionDef[] = [
   { id: 'nextTab', label: '次のタブ', fallback: 'Ctrl+Tab', group: 'タブ' },
   { id: 'prevTab', label: '前のタブ', fallback: 'Ctrl+Shift+Tab', group: 'タブ' },
 
+  { id: 'hoverParent', label: 'ポインター先で親へ', fallback: 'Q', group: '左手操作' },
+  { id: 'hoverClosePane', label: 'ポインター先のペインを閉じる', fallback: 'W', group: '左手操作' },
+  { id: 'hoverFavorite', label: 'ポインター先をお気に入り切替', fallback: 'F', group: '左手操作' },
+  { id: 'hoverSplitPane', label: 'ポインター先を分割', fallback: 'N', group: '左手操作' },
+  { id: 'hoverPreview', label: 'ポインター先のプレビュー', fallback: 'Space', group: '左手操作' },
+
   { id: 'settings', label: '設定を開く', fallback: 'Ctrl+,', group: 'その他' },
 ]
 
@@ -70,6 +81,9 @@ export function keyToString(ev: KeyboardEvent): string {
   let key = ev.key
   // 修飾キー単体は表記に含めない（`Ctrl+Control` になってしまう）。
   if (['Control', 'Alt', 'Shift', 'Meta'].includes(key)) return parts.join('+')
+
+  // KeyboardEvent はスペースを文字 ` ` で返すが、設定画面では読める名前にする。
+  if (key === ' ') key = 'Space'
 
   // 1文字キーは大文字に揃える。Shift 併用で `Ctrl+Shift+z` と `Ctrl+Shift+Z` に
   // 割れると、設定と実際の判定が一致しなくなる。

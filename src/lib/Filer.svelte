@@ -7,7 +7,7 @@
   import SettingsDialog from './SettingsDialog.svelte'
   import * as api from './api'
   import { splitPath } from './api'
-  import { matchAction } from './shortcuts'
+  import { matchAction, resolveKey } from './shortcuts'
 
   const win = getCurrentWindow()
   const label = win.label
@@ -453,7 +453,15 @@
     <span>{activeTab?.panes.length ?? 0} ペイン{tabs.length > 1 ? ` / ${tabs.length} タブ` : ''}</span>
     <span class="spacer" />
     {#if notes[0]}<span class="note">{notes[0]}</span>{/if}
-    <span class="left-keys">Q 親へ · W 閉じる · F お気に入り · N 分割 · Space プレビュー</span>
+    {#if settings}
+      <span class="left-keys">
+        {resolveKey('hoverParent', settings.shortcuts)} 親へ ·
+        {resolveKey('hoverClosePane', settings.shortcuts)} 閉じる ·
+        {resolveKey('hoverFavorite', settings.shortcuts)} お気に入り ·
+        {resolveKey('hoverSplitPane', settings.shortcuts)} 分割 ·
+        {resolveKey('hoverPreview', settings.shortcuts)} プレビュー
+      </span>
+    {/if}
     <span class="hotkey">{hotkey} で窓一覧 · Ctrl+T 新規タブ</span>
   </footer>
 </main>

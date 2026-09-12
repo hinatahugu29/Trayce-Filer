@@ -30,6 +30,7 @@ describe('keyToString', () => {
     expect(keyToString(ev({ key: 'F5' }))).toBe('F5')
     expect(keyToString(ev({ key: 'Delete' }))).toBe('Delete')
     expect(keyToString(ev({ key: 'Tab', ctrlKey: true }))).toBe('Ctrl+Tab')
+    expect(keyToString(ev({ key: ' ' }))).toBe('Space')
   })
 
   // `Ctrl+Control` のような表記になるのを防ぐ。
@@ -57,11 +58,14 @@ describe('matchAction', () => {
   it('既定のキーで当たる', () => {
     expect(matchAction(ev({ key: 'c', ctrlKey: true }), {})).toBe('copy')
     expect(matchAction(ev({ key: 'F5' }), {})).toBe('reload')
+    expect(matchAction(ev({ key: 'q' }), {})).toBe('hoverParent')
+    expect(matchAction(ev({ key: ' ' }), {})).toBe('hoverPreview')
   })
 
   it('設定で割り当てを変えたら新しい方で当たる', () => {
     const custom = { undo: 'Ctrl+U' }
     expect(matchAction(ev({ key: 'u', ctrlKey: true }), custom)).toBe('undo')
+    expect(matchAction(ev({ key: 'g' }), { hoverParent: 'G' })).toBe('hoverParent')
   })
 
   it('該当が無ければ null', () => {

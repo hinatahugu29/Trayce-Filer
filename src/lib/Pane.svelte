@@ -487,39 +487,6 @@
     const el = ev.target as HTMLElement | null
     if (el && (el.tagName === 'INPUT' || el.isContentEditable)) return
 
-    // ChainFlow で定着している「右手で指し、左手で動詞を与える」単独キー。
-    // Ctrl 等との組み合わせは既存ショートカットへ譲り、キーリピートによる連打も防ぐ。
-    if (!ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.metaKey && !ev.repeat) {
-      switch (ev.key.toUpperCase()) {
-        case 'Q':
-          if (listing?.parent) {
-            ev.preventDefault()
-            open(listing.parent)
-          }
-          return
-        case 'W':
-          if (closable) {
-            ev.preventDefault()
-            onClose()
-          }
-          return
-        case 'F':
-          ev.preventDefault()
-          toggleFavorite()
-          return
-        case 'N':
-          if (listing) {
-            ev.preventDefault()
-            onSplit(listing.path)
-          }
-          return
-        case ' ':
-          ev.preventDefault()
-          showPreview = !showPreview
-          return
-      }
-    }
-
     // 割り当ては設定から引く。既定と設定の二重管理を避けるため、
     // ここでキーを直接書かない（shortcuts.ts が唯一の定義元）。
     const action = matchAction(ev, settings.shortcuts)
@@ -569,6 +536,31 @@
       case 'settings':
         ev.preventDefault()
         onOpenSettings()
+        break
+      case 'hoverParent':
+        if (ev.repeat || !listing?.parent) break
+        ev.preventDefault()
+        open(listing.parent)
+        break
+      case 'hoverClosePane':
+        if (ev.repeat || !closable) break
+        ev.preventDefault()
+        onClose()
+        break
+      case 'hoverFavorite':
+        if (ev.repeat) break
+        ev.preventDefault()
+        toggleFavorite()
+        break
+      case 'hoverSplitPane':
+        if (ev.repeat || !listing) break
+        ev.preventDefault()
+        onSplit(listing.path)
+        break
+      case 'hoverPreview':
+        if (ev.repeat) break
+        ev.preventDefault()
+        showPreview = !showPreview
         break
       // 一覧の中の操作（↑↓/Enter/F2/Delete/Ctrl+A）は FileList 側が持つ。
       // タブ操作は窓レベル（Filer.svelte）が持つ。
