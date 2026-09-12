@@ -78,6 +78,8 @@ results available as normal copy/move/preview/tray sources.
 - Search result columns now collapse by available pane width, preserving the name/source-path column when a search pane sits beside a destination pane.
 - Phase 14 implemented selectively: spaces are AND, `|` is OR, and a leading `!` or `-` excludes a term. Semicolon/full-width-semicolon separated roots are searched together, duplicate roots are collapsed, and each pane keeps ten deduplicated recent queries.
 - Parallel scanning and pause/resume remain a measured follow-up. Cancellation is already available; concurrency should be added only if real-device profiling shows that filesystem latency justifies the extra pressure and ordering complexity.
+- Search interaction was revised after user feedback to match `File_Search_APP`: entering the search role immediately starts one background inventory pass, while editing the query filters the accumulated entries in memory on every keystroke. Enter is no longer required to begin a search; it only records the current query in history.
+- Changing roots or pressing reload rebuilds the inventory. While the inventory is still growing, the current query is reapplied to every arriving batch. The existing 50,000-entry cap currently also caps this in-WebView inventory and must be revisited if real-device searches regularly exceed it.
 
 ## Key integration points
 
@@ -155,6 +157,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Completed Phase 12 actionable search results and generalized file-list path identity for virtual listings. Full verification passed with the same 48 frontend and 76 Rust tests plus production build.
 - 2026-09-13: Completed Phase 13 search-session restoration and narrow-pane presentation. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 77 Rust tests (1 ignored benchmark), and a production build.
 - 2026-09-13: Completed the selected Phase 14 advanced-search set: AND/OR/NOT, multiple roots, duplicate-root suppression, and per-pane query history. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 79 Rust tests (1 ignored benchmark), and a production build.
+- 2026-09-13: Reworked search initiation around a scan-on-pane-open, filter-as-you-type model. Added shared frontend query semantics and regression tests; verification passed with 0 Svelte diagnostics, 51 frontend tests, 79 Rust tests (1 ignored benchmark), and a production build.
 
 ## Commit log
 
@@ -183,3 +186,5 @@ Each slice gets its own implementation commit followed by verification and a han
 - `28ea183` — `feat: restore search pane sessions`
 - `c6b3423` — `docs: record search session milestone`
 - `cee3f60` — `feat: add advanced pane search`
+- `3fcc742` — `docs: record advanced search milestone`
+- `9c77101` — `feat: filter search panes as you type`
