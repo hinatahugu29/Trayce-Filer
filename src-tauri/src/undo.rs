@@ -23,6 +23,11 @@ pub enum UndoAction {
     pairs: Vec<(PathBuf, PathBuf)>,
     /// true なら移動だった（元を消していたので戻す）。false ならコピー（作られた方を消すだけ）。
     was_move: bool,
+    /// 上書きでゴミ箱へ送った既存項目の元の場所。取り消し時にゴミ箱から戻す。
+    ///
+    /// `TrashItem` ではなくパスで持つ。転送のたびにゴミ箱を全件列挙すると遅いので、
+    /// 列挙は取り消しを実行する時だけにする。
+    replaced: Vec<PathBuf>,
   },
 }
 
@@ -39,12 +44,17 @@ impl UndoAction {
           format!("ゴミ箱へ移動（{}件）", items.len())
         }
       }
-      UndoAction::Transfer { pairs, was_move } => {
+      UndoAction::Transfer { pairs, was_move, replaced } => {
         let verb = if *was_move { "移動" } else { "コピー" };
-        if pairs.len() == 1 {
+        let base = if pairs.len() == 1 {
           format!("{verb}「{}」", name_of(&pairs[0].1))
         } else {
           format!("{verb}（{}件）", pairs.len())
+        };
+        if replaced.is_empty() {
+          base
+        } else {
+          format!("{base}・上書きした{}件をゴミ箱から戻す", replaced.len())
         }
       }
     }
@@ -135,7 +145,7 @@ fn apply_undo(action: UndoAction) -> Result<(), String> {
       trash::os_limited::restore_all(items).map_err(|e| format!("復元できません: {e}"))?;
     }
 
-    UndoAction::Transfer { pairs, was_move } => {
+    UndoAction::Transfer { pairs, was_move, replaced } => {
       let mut failed = Vec::new();
       for (from, to) in pairs {
         if !to.exists() {
@@ -174,9 +184,37 @@ fn apply_undo(action: UndoAction) -> Result<(), String> {
         }
       }
       if !failed.is_empty() {
+        // 新しい方が退かせていないと、既存を戻す場所がふさがっている。戻さずに知らせる。
         return Err(format!("一部を元に戻せませんでした: {}", failed.join(", ")));
       }
+      // 新しい方を退かした後で、上書き前の既存項目を元の場所へ戻す。
+      if !replaced.is_empty() {
+        restore_replaced(&replaced)?;
+      }
     }
+  }
+  Ok(())
+}
+
+/// 上書きでゴミ箱へ送った項目を、元の場所へ戻す。
+/// 同じ場所が何度もゴミ箱に入っていることがあるので、それぞれ最も新しく消したものを選ぶ。
+fn restore_replaced(replaced: &[PathBuf]) -> Result<(), String> {
+  let wanted: std::collections::HashSet<&PathBuf> = replaced.iter().collect();
+  let mut items: Vec<trash::TrashItem> = trash::os_limited::list()
+    .map_err(|e| format!("ゴミ箱を読めません: {e}"))?
+    .into_iter()
+    .filter(|item| wanted.contains(&item.original_path()))
+    .collect();
+  items.sort_by_key(|item| std::cmp::Reverse(item.time_deleted));
+  let mut seen = std::collections::HashSet::new();
+  items.retain(|item| seen.insert(item.original_path()));
+
+  let missing = replaced.len() - items.len();
+  if !items.is_empty() {
+    trash::os_limited::restore_all(items).map_err(|e| format!("上書き前の項目を復元できません: {e}"))?;
+  }
+  if missing > 0 {
+    return Err(format!("上書き前の項目のうち {missing}件はゴミ箱に見つかりませんでした（既に空にした可能性があります）"));
   }
   Ok(())
 }
@@ -264,7 +302,7 @@ mod tests {
     std::fs::write(&src, b"x").unwrap();
     std::fs::copy(&src, &dst).unwrap();
 
-    apply_undo(UndoAction::Transfer { pairs: vec![(src.clone(), dst.clone())], was_move: false })
+    apply_undo(UndoAction::Transfer { pairs: vec![(src.clone(), dst.clone())], was_move: false, replaced: vec![] })
       .unwrap();
 
     assert!(!dst.exists(), "コピー先は消えるべき");
@@ -280,12 +318,23 @@ mod tests {
     std::fs::write(&src, b"x").unwrap();
     std::fs::rename(&src, &dst).unwrap();
 
-    apply_undo(UndoAction::Transfer { pairs: vec![(src.clone(), dst.clone())], was_move: true })
+    apply_undo(UndoAction::Transfer { pairs: vec![(src.clone(), dst.clone())], was_move: true, replaced: vec![] })
       .unwrap();
 
     assert!(src.exists(), "移動元に戻るべき");
     assert!(!dst.exists());
     let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// 上書きを含む転送は、取り消しで既存も戻ることを利用者に伝える。
+  /// （ゴミ箱からの実際の復元は利用者のゴミ箱を触るため、ここでは確かめない。）
+  #[test]
+  fn transfer_label_mentions_replaced_items() {
+    let pairs = vec![(PathBuf::from(r"C:\from\a.txt"), PathBuf::from(r"C:\to\a.txt"))];
+    let plain = UndoAction::Transfer { pairs: pairs.clone(), was_move: false, replaced: vec![] };
+    assert_eq!(plain.label(), "コピー「a.txt」");
+    let overwrote = UndoAction::Transfer { pairs, was_move: false, replaced: vec![PathBuf::from(r"C:\to\a.txt")] };
+    assert_eq!(overwrote.label(), "コピー「a.txt」・上書きした1件をゴミ箱から戻す");
   }
 
   #[test]

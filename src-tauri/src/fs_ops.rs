@@ -306,9 +306,16 @@ pub fn transfer_pub(
   conflict: ConflictPolicy,
   cancel: &std::sync::atomic::AtomicBool,
   on_progress: &mut dyn FnMut(&Progress, &str),
-) -> Result<Vec<(PathBuf, PathBuf)>, String> {
-  let to_trash = |path: &Path| trash::delete(path).map_err(|e| format!("{} をゴミ箱へ送れません: {e}", path.display()));
-  transfer_with_policy(paths, dest, move_files, conflict, &to_trash, cancel, on_progress)
+) -> Result<(Vec<(PathBuf, PathBuf)>, Vec<PathBuf>), String> {
+  // 上書きでゴミ箱へ送った既存項目の元の場所。undo でゴミ箱から戻すために返す。
+  let replaced = std::cell::RefCell::new(Vec::new());
+  let to_trash = |path: &Path| {
+    trash::delete(path).map_err(|e| format!("{} をゴミ箱へ送れません: {e}", path.display()))?;
+    replaced.borrow_mut().push(path.to_path_buf());
+    Ok(())
+  };
+  let pairs = transfer_with_policy(paths, dest, move_files, conflict, &to_trash, cancel, on_progress)?;
+  Ok((pairs, replaced.into_inner()))
 }
 
 /// 総量の事前集計。戻り値は (ファイル数, バイト数)。

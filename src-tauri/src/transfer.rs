@@ -134,17 +134,19 @@ pub fn start_transfer(
 
     let cancelled = cancel.load(Ordering::Relaxed);
     let (created, error, completed_sources) = match result {
-      Ok(pairs) => {
+      Ok((pairs, replaced)) => {
         let count = pairs.len();
         let completed_sources = pairs
           .iter()
           .map(|(source, _)| source.to_string_lossy().to_string())
           .collect();
         // 中断で0件だった場合、undo に積む意味が無い。
-        if count > 0 {
+        // 上書きで既存をゴミ箱へ送っていれば、転送が0件でも戻す対象がある。
+        if count > 0 || !replaced.is_empty() {
           app.state::<crate::undo::UndoStack>().push(crate::undo::UndoAction::Transfer {
             pairs,
             was_move: move_files,
+            replaced,
           });
         }
         (count, None, completed_sources)
