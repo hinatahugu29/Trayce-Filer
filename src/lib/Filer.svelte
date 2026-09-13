@@ -68,6 +68,7 @@
 
   $: activeTab = tabs.find((t) => t.id === activeTabId)
   $: if (ready && activeTab) api.setWindowTray(label, activeTab.trayItems).catch(() => {})
+  $: if (ready && activeTab) syncWindowContext()
 
   let notes: string[] = []
   function note(message: string) {
@@ -88,10 +89,18 @@
     return tab.panes.find((p) => p.id === tab.activeId)?.ref?.currentPath() ?? undefined
   }
 
-  /** 窓のタイトルとレジストリには、いま表に出ているペインのパスを出す。 */
-  function syncWindowPath() {
-    const path = activePanePath()
-    if (path) api.setWindowPath(label, path)
+  /** 窓のタイトルと俯瞰表示へ、現在タブの全ペインを同期する。 */
+  function syncWindowContext() {
+    const tab = activeTab
+    if (!tab) return
+    const panes: api.WindowPaneInfo[] = tab.panes.map((pane) => ({
+      id: pane.id,
+      kind: pane.kind,
+      path: pane.ref?.currentPath() || pane.path,
+      query: pane.kind === 'search' ? pane.search?.query ?? '' : '',
+      is_active: pane.id === tab.activeId,
+    }))
+    api.setWindowContext(label, tabLabel(tab), tabs.length, panes).catch(() => {})
   }
 
   function newTab(path: string) {
@@ -200,7 +209,7 @@
       pane.search = newSearchState(directoryPath)
     }
     tabs = tabs
-    syncWindowPath()
+    syncWindowContext()
   }
 
   function updatePaneSearch(id: number, search: api.SavedSearchState) {
@@ -216,7 +225,7 @@
     pane.path = path
     pane.kind = 'directory'
     tabs = tabs
-    syncWindowPath()
+    syncWindowContext()
   }
 
   function toggleTrayItem(path: string) {
@@ -255,7 +264,7 @@
     if (tab.activeId === id) tab.activeId = tab.panes[0].id
     tabs = tabs
     if (hoveredPaneId === id) hoveredPaneId = null
-    syncWindowPath()
+    syncWindowContext()
   }
 
   /** ペインを独立した窓へ切り離す。分割の逆操作。 */
@@ -502,7 +511,7 @@
               onActivate={() => {
                 activeTab.activeId = pane.id
                 tabs = tabs
-                syncWindowPath()
+    syncWindowContext()
               }}
               onSplit={(path) => splitPane(pane.id, path)}
               onSplitSearch={(path, search) => splitPane(pane.id, path, 'search', search)}
@@ -536,14 +545,14 @@
               onActivate={() => {
                 activeTab.activeId = pane.id
                 tabs = tabs
-                syncWindowPath()
+                syncWindowContext()
               }}
               onPathChange={(path) => {
                 // タブラベルは末尾フォルダ名を出すので、移動のたびに更新しないと
                 // 「hinat」のまま固まって見える（実際のパスバーとタブ名が食い違う）。
                 pane.path = path
                 tabs = tabs
-                syncWindowPath()
+                syncWindowContext()
               }}
               onNote={note}
               onSplit={(path) => splitPane(pane.id, path)}
