@@ -176,6 +176,9 @@ pub struct Store {
   saver: Mutex<Option<Sender<()>>>,
   /// 書き込み係と終了時の flush が同じ一時ファイルを同時に触らないようにする。
   write_lock: Mutex<()>,
+  /// 開いている窓ごとの直近のセッション。窓が閉じた時に `last_session` へ昇格させる。
+  /// どの窓も保存するので、単に最後に保存された内容ではなく「最後に閉じた窓」を残すために分けて持つ。
+  window_sessions: Mutex<std::collections::HashMap<String, SessionState>>,
 }
 
 /// 保存要求がこの時間途切れたら書く。
@@ -322,6 +325,21 @@ impl Store {
     out
   }
 
+  /// 窓のセッションを覚える。落ちた時にも直近が残るよう `last_session` も更新する。
+  fn record_window_session(&self, label: &str, session: SessionState) {
+    self.window_sessions.lock().unwrap().insert(label.to_string(), session.clone());
+    self.with(|s| s.last_session = Some(session));
+  }
+
+  /// 閉じた窓のセッションを次回起動時の復元対象にする。
+  ///
+  /// 窓は1枚ずつ閉じられ、最後に閉じた窓がここを最後に通る。
+  /// 別の窓がその後に保存していても、閉じた順が優先される。
+  pub fn promote_window_session(&self, label: &str) {
+    let Some(session) = self.window_sessions.lock().unwrap().remove(label) else { return };
+    self.with(|s| s.last_session = Some(session));
+  }
+
   /// 設定されたオーバーレイのホットキー。
   /// setup 時（コマンド経由でない場所）から読むために用意している。
   pub fn overlay_hotkey(&self) -> String {
@@ -419,9 +437,10 @@ pub fn reset_settings(app: AppHandle) -> Settings {
 }
 
 /// セッション状態（直前に開いていたタブとペイン）を保存する。
+/// `label` はその窓。最後に閉じた窓のセッションが次回起動時に復元される。
 #[tauri::command]
-pub fn save_session_state(app: AppHandle, session: SessionState) {
-  app.state::<Store>().with(|s| s.last_session = Some(session));
+pub fn save_session_state(app: AppHandle, label: String, session: SessionState) {
+  app.state::<Store>().record_window_session(&label, session);
 }
 
 /// 保存されているセッション状態を取得する。
@@ -535,6 +554,46 @@ mod tests {
 
     let s: State = serde_json::from_str(r#"{"favorites":["C:\\a"]}"#).unwrap();
     assert_eq!(s.favorites, vec![r"C:\a".to_string()]);
+  }
+
+  fn session_at(path: &str) -> SessionState {
+    SessionState {
+      tabs: vec![SavedTabState {
+        panes: vec![SavedPaneState { path: path.into(), ..Default::default() }],
+        ..Default::default()
+      }],
+      active_tab_index: 0,
+    }
+  }
+
+  fn restored_path(store: &Store) -> String {
+    store.state.lock().unwrap().last_session.as_ref().unwrap().tabs[0].panes[0].path.clone()
+  }
+
+  /// 最後に保存した窓ではなく、最後に閉じた窓が次回の復元対象になる。
+  #[test]
+  fn the_last_closed_window_wins_over_the_last_saved_one() {
+    let store = Store::default();
+    store.record_window_session("main", session_at(r"C:\main"));
+    store.record_window_session("filer-1", session_at(r"D:\detached"));
+    // 後から main が保存し直す（別の窓で作業していた）。
+    store.record_window_session("main", session_at(r"C:\main-later"));
+    assert_eq!(restored_path(&store), r"C:\main-later", "落ちた時に備えて直近は常に残す");
+
+    // main を先に閉じ、切り離した窓を最後に閉じる。
+    store.promote_window_session("main");
+    store.promote_window_session("filer-1");
+    assert_eq!(restored_path(&store), r"D:\detached");
+  }
+
+  /// セッションを保存しない窓（オーバーレイ等）が閉じても、復元対象を消さない。
+  #[test]
+  fn closing_a_window_without_a_session_keeps_the_previous_one() {
+    let store = Store::default();
+    store.record_window_session("main", session_at(r"C:\main"));
+    store.promote_window_session("main");
+    store.promote_window_session("overlay");
+    assert_eq!(restored_path(&store), r"C:\main");
   }
 
   #[test]

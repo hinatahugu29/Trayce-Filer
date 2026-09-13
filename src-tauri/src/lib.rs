@@ -125,7 +125,8 @@ pub fn run() {
       if let tauri::WindowEvent::Destroyed = event {
         let app = window.app_handle();
         let label = window.label().to_string();
-        app.state::<windows::Registry>();
+        // 最後に閉じた窓を次回起動時に復元する。unregister が最後の窓で終了させるので、その前に行う。
+        app.state::<store::Store>().promote_window_session(&label);
         windows::unregister_window(app.clone(), label);
       }
     })

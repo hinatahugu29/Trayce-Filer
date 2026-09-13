@@ -346,9 +346,11 @@
     }
   })
 
-  /** 現在の全タブ・ペインの状態を永続化保存する */
+  /**
+   * 現在の全タブ・ペインの状態を永続化保存する。
+   * 切り離した窓も保存し、次回起動時は最後に閉じた窓の状態が復元される。
+   */
   function saveCurrentSession() {
-    if (label !== 'main') return
     const sessionTabs = tabs.map((t) => {
       const activeIdx = Math.max(0, t.panes.findIndex((p) => p.id === t.activeId))
       const panes = t.panes.map((p) => ({
@@ -361,7 +363,7 @@
     })
     const activeTabIdx = Math.max(0, tabs.findIndex((t) => t.id === activeTabId))
     if (sessionTabs.length > 0) {
-      api.saveSessionState({ tabs: sessionTabs, activeTabIndex: activeTabIdx }).catch(() => {})
+      api.saveSessionState(label, { tabs: sessionTabs, activeTabIndex: activeTabIdx }).catch(() => {})
     }
   }
 

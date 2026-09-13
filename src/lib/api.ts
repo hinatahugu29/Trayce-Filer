@@ -291,8 +291,9 @@ export type SavedPaneState = {
 export type SavedTabState = { panes: SavedPaneState[]; activePaneIndex: number; trayPaths?: string[] }
 export type SessionState = { tabs: SavedTabState[]; activeTabIndex: number }
 
-export const saveSessionState = (session: SessionState) =>
-  invoke<void>('save_session_state', { session })
+/** どの窓も保存する。次回起動時は最後に閉じた窓のセッションが main に復元される。 */
+export const saveSessionState = (label: string, session: SessionState) =>
+  invoke<void>('save_session_state', { label, session })
 export const getSessionState = () => invoke<SessionState | null>('get_session_state')
 
 export type UndoState = { available: boolean; label: string }
