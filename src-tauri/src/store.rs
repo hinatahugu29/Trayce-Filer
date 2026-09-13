@@ -53,6 +53,14 @@ pub struct Settings {
   /// アプリ内ショートカット。`アクション名 -> キー表記` の対応。
   /// 未設定のアクションは組み込みの既定値を使う。
   pub shortcuts: std::collections::HashMap<String, String>,
+  /// 検索で中へ潜らないフォルダ名（大文字小文字は区別しない）。
+  /// 中身が膨大で探す対象になりにくい場所を最初から読まず、読み込みを速くし結果の雑音を減らす。
+  pub search_excludes: Vec<String>,
+}
+
+/// 検索で既定で除くフォルダ名。
+pub fn default_search_excludes() -> Vec<String> {
+  [".git", "node_modules", "$RECYCLE.BIN", "System Volume Information"].into_iter().map(String::from).collect()
 }
 
 impl Default for Settings {
@@ -68,6 +76,7 @@ impl Default for Settings {
       restore_session: true,
       overlay_hotkey: "CmdOrCtrl+Shift+Space".into(),
       shortcuts: std::collections::HashMap::new(),
+      search_excludes: default_search_excludes(),
     }
   }
 }
@@ -338,6 +347,11 @@ impl Store {
   pub fn promote_window_session(&self, label: &str) {
     let Some(session) = self.window_sessions.lock().unwrap().remove(label) else { return };
     self.with(|s| s.last_session = Some(session));
+  }
+
+  /// 検索で除くフォルダ名。検索の開始時に読む（設定を変えたら次の読み込みから効く）。
+  pub fn search_excludes(&self) -> Vec<String> {
+    self.state.lock().unwrap().settings.search_excludes.clone()
   }
 
   /// 設定されたオーバーレイのホットキー。
@@ -674,6 +688,16 @@ mod tests {
     assert!(s.settings.show_sidebar);
     assert!(!s.settings.show_preview);
     assert_eq!(s.settings.sort_key, "name");
+  }
+
+  /// 除外設定を追加する前の設定でも、既定の除外が効くこと。空にした利用者の選択は保つこと。
+  #[test]
+  fn search_excludes_default_for_older_settings_and_respect_an_empty_choice() {
+    let older: State = serde_json::from_str(r#"{"settings":{"showHidden":true}}"#).unwrap();
+    assert_eq!(older.settings.search_excludes, default_search_excludes());
+
+    let cleared: State = serde_json::from_str(r#"{"settings":{"searchExcludes":[]}}"#).unwrap();
+    assert!(cleared.settings.search_excludes.is_empty(), "除外しないと決めた設定を既定で上書きしない");
   }
 
   /// 設定項目を後から増やしても、一部しか無い JSON が読めること。

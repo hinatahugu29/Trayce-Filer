@@ -267,6 +267,8 @@ export type Settings = {
   restoreSession: boolean
   overlayHotkey: string
   shortcuts: Record<string, string>
+  /** 検索で中へ潜らないフォルダ名（大文字小文字は区別しない）。 */
+  searchExcludes: string[]
 }
 
 export const getSettings = () => invoke<Settings>('get_settings')

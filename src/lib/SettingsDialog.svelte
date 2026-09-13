@@ -154,6 +154,29 @@
         </section>
 
         <section>
+          <h3>検索</h3>
+          <div class="row stacked">
+            <span class="row-label">読み込まないフォルダ名（1行に1つ）</span>
+            <textarea
+              class="excludes"
+              rows="4"
+              spellcheck="false"
+              value={(draft.searchExcludes ?? []).join('\n')}
+              on:input={(event) => {
+                if (!draft) return
+                draft.searchExcludes = event.currentTarget.value
+                  .split(/[\n;；]/)
+                  .map((name) => name.trim())
+                  .filter(Boolean)
+              }}
+            />
+          </div>
+          <p class="note">
+            名前が一致するフォルダの中は検索で読み込みません（大文字小文字は区別しません）。次に検索対象を読み込む時から効きます。
+          </p>
+        </section>
+
+        <section>
           <h3>ショートカット</h3>
           {#if conflicts.size}
             <p class="warn">同じキーが複数の操作に割り当てられています。片方が効きません。</p>
@@ -448,5 +471,26 @@
   footer .reset:hover {
     background: #3a2020;
     color: #ff9b9b;
+  }
+
+  .row.stacked {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .excludes {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    background: #181818;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #ddd;
+    font: 12px ui-monospace, Consolas, monospace;
+    resize: vertical;
+  }
+  .excludes:focus {
+    outline: none;
+    border-color: #4c9aff;
   }
 </style>

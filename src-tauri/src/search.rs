@@ -265,9 +265,9 @@ fn compare_entries(a: &CachedEntry, b: &CachedEntry, options: &SearchOptions) ->
   order.then_with(|| a.path_lower.cmp(&b.path_lower))
 }
 
-fn scan_roots(app: AppHandle, id: String, roots: Vec<String>, session: Arc<SearchSession>) {
+fn scan_roots(app: AppHandle, id: String, roots: Vec<String>, excludes: Vec<String>, session: Arc<SearchSession>) {
   std::thread::spawn(move || {
-    let result = scan(&roots, &session.control, |batch, indexed| {
+    let result = scan(&roots, &excludes, &session.control, |batch, indexed| {
       session.entries.lock().unwrap().extend(batch);
       let _ = app.emit(SEARCH_PROGRESS, SearchProgressEvent { id: id.clone(), indexed, paused: false });
       let _ = session.query_tx.send(SearchCommand::Refresh);
@@ -282,7 +282,9 @@ fn scan_roots(app: AppHandle, id: String, roots: Vec<String>, session: Arc<Searc
   });
 }
 
-fn scan<F>(roots: &[String], control: &ScanControl, mut add: F) -> Result<(usize, usize), String>
+/// `excludes` は中へ潜らないフォルダ名。そのフォルダ自体も結果に出さない。
+/// 名前の比較は検索と同じ表記ゆれの畳み方で行う（`.GIT` も `.git` と同じ扱い）。
+fn scan<F>(roots: &[String], excludes: &[String], control: &ScanControl, mut add: F) -> Result<(usize, usize), String>
 where F: FnMut(Vec<Arc<CachedEntry>>, usize) {
   if roots.is_empty() { return Err("検索対象のフォルダを指定してください".into()); }
   let mut stack = Vec::new();
@@ -296,6 +298,7 @@ where F: FnMut(Vec<Arc<CachedEntry>>, usize) {
     let plain = PathBuf::from(crate::fs_ops::strip_unc(&canonical));
     if seen.insert(plain.to_string_lossy().to_lowercase()) { stack.push(plain); }
   }
+  let excluded: HashSet<String> = excludes.iter().map(|name| normalize(name.trim())).filter(|name| !name.is_empty()).collect();
   let mut indexed = 0;
   let mut warnings = 0;
   let mut batch = Vec::with_capacity(1000);
@@ -308,6 +311,9 @@ where F: FnMut(Vec<Arc<CachedEntry>>, usize) {
       if control.cancelled.load(Ordering::Relaxed) { break; }
       let Ok(item) = item else { warnings += 1; continue };
       let Ok(kind) = item.file_type() else { warnings += 1; continue };
+      if kind.is_dir() && !excluded.is_empty() && excluded.contains(&normalize(&item.file_name().to_string_lossy())) {
+        continue;
+      }
       let path = item.path();
       if kind.is_dir() && !kind.is_symlink() { stack.push(path.clone()); }
       batch.push(Arc::new(CachedEntry::new(path, kind.is_dir(), item.metadata().ok())));
@@ -533,7 +539,8 @@ pub fn start_search(app: AppHandle, id: String, roots: Vec<String>) -> Result<()
   let worker_app = app.clone();
   let worker_id = id.clone();
   std::thread::spawn(move || search_worker(worker_app, worker_id, entries, query_rx));
-  scan_roots(app, id, roots, session);
+  let excludes = app.state::<crate::store::Store>().search_excludes();
+  scan_roots(app, id, roots, excludes, session);
   Ok(())
 }
 
@@ -735,7 +742,7 @@ mod tests {
     fs::write(root.join("nested").join("two.txt"), b"2").unwrap();
     let text = root.to_string_lossy().to_string();
     let mut found = Vec::new();
-    let result = scan(&[text.clone(), text], &ScanControl::new(), |batch, _| found.extend(batch)).unwrap();
+    let result = scan(&[text.clone(), text], &[], &ScanControl::new(), |batch, _| found.extend(batch)).unwrap();
     assert_eq!(result.0, 3);
     assert_eq!(found.len(), 3);
     assert!(found.iter().all(|entry| !entry.view.path.starts_with(r"\\?\")), "結果パスは通常ペインと同じ表記であるべき");
@@ -751,9 +758,26 @@ mod tests {
     let control = ScanControl::new();
     control.cancel();
     let mut found = Vec::new();
-    let result = scan(&[root.to_string_lossy().to_string()], &control, |batch, _| found.extend(batch)).unwrap();
+    let result = scan(&[root.to_string_lossy().to_string()], &[], &control, |batch, _| found.extend(batch)).unwrap();
     assert_eq!(result.0, 0);
     assert!(found.is_empty());
+    fs::remove_dir_all(root).unwrap();
+  }
+
+  /// 除外したフォルダは中へ潜らず、フォルダ自体も結果に出さない。名前の大文字小文字は問わない。
+  #[test]
+  fn scan_skips_excluded_folder_names() {
+    let root = temp_dir("excludes");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("Node_Modules").join("pkg")).unwrap();
+    fs::write(root.join("src").join("keep.txt"), b"k").unwrap();
+    fs::write(root.join("Node_Modules").join("pkg").join("skip.txt"), b"s").unwrap();
+
+    let mut found = Vec::new();
+    scan(&[root.to_string_lossy().to_string()], &["node_modules".into()], &ScanControl::new(), |batch, _| found.extend(batch)).unwrap();
+    let names: Vec<&str> = found.iter().map(|entry| entry.view.name.as_str()).collect();
+    assert!(names.contains(&"keep.txt"));
+    assert!(!names.iter().any(|name| name.eq_ignore_ascii_case("node_modules") || *name == "pkg" || *name == "skip.txt"), "{names:?}");
     fs::remove_dir_all(root).unwrap();
   }
 }
