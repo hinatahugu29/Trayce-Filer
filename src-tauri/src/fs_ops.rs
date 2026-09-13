@@ -318,24 +318,34 @@ fn transfer(
 
     if src.is_dir() {
       // ディレクトリの再帰コピーは std に無いので自前。
-      copy_dir_all(&src, &target, cancel, &mut progress, on_progress)
+      let completed = copy_dir_all(&src, &target, cancel, &mut progress, on_progress)
         .map_err(|e| format!("{p}: {e}"))?;
-      if move_files && !cancel.load(Ordering::Relaxed) {
+      if !completed {
+        // 途中まで作ったフォルダは、揃っているように見えて中身が欠けている。
+        // target は unique_target で新しく作った場所なので、丸ごと消してよい。
+        let _ = std::fs::remove_dir_all(&target);
+        break;
+      }
+      if move_files {
         std::fs::remove_dir_all(&src).map_err(|e| format!("{p} の削除に失敗: {e}"))?;
       }
     } else if move_files && std::fs::rename(&src, &target).is_ok() {
       // 同一ボリューム内なら rename が速い。跨ぐと失敗するのでコピー+削除に落とす。
       progress.files_done += 1;
-      progress.bytes_done += src.metadata().map(|m| m.len()).unwrap_or(0);
+      progress.bytes_done += target.metadata().map(|m| m.len()).unwrap_or(0);
       on_progress(&progress, &src.to_string_lossy());
     } else {
-      copy_file(&src, &target, cancel, &mut progress, on_progress)
+      let completed = copy_file(&src, &target, cancel, &mut progress, on_progress)
         .map_err(|e| format!("{p}: {e}"))?;
-      if move_files && !cancel.load(Ordering::Relaxed) {
+      if !completed {
+        break;
+      }
+      if move_files {
         std::fs::remove_file(&src).map_err(|e| format!("{p} の削除に失敗: {e}"))?;
       }
     }
 
+    // 中断された項目はここへ来ない。トレイや undo は「実際に終わったもの」だけを受け取る。
     done.push((src, target));
   }
   Ok(done)
@@ -345,13 +355,16 @@ fn transfer(
 ///
 /// `std::fs::copy` を使わないのは、途中経過が取れず中断もできないため。
 /// 数GBのファイルで固まって見えるのを避ける。
+///
+/// 戻り値は最後まで書けたか。中断時は書きかけを消して `Ok(false)` を返す
+/// （`Ok(())` だと呼び出し側が完了と区別できず、トレイから項目が消えていた）。
 fn copy_file(
   src: &Path,
   dst: &Path,
   cancel: &std::sync::atomic::AtomicBool,
   progress: &mut Progress,
   on_progress: &mut dyn FnMut(&Progress, &str),
-) -> std::io::Result<()> {
+) -> std::io::Result<bool> {
   use std::io::{Read, Write};
   use std::sync::atomic::Ordering;
 
@@ -368,7 +381,7 @@ fn copy_file(
       // という最悪の状態になる。消してから抜ける。
       drop(writer);
       let _ = std::fs::remove_file(dst);
-      return Ok(());
+      return Ok(false);
     }
 
     let n = reader.read(&mut buf)?;
@@ -383,7 +396,7 @@ fn copy_file(
   writer.flush()?;
   progress.files_done += 1;
   on_progress(progress, &label);
-  Ok(())
+  Ok(true)
 }
 
 /// 転送前に総量を数える。進捗の分母を出すために要る。
@@ -442,23 +455,26 @@ fn copy_dir_all(
   cancel: &std::sync::atomic::AtomicBool,
   progress: &mut Progress,
   on_progress: &mut dyn FnMut(&Progress, &str),
-) -> std::io::Result<()> {
+) -> std::io::Result<bool> {
   use std::sync::atomic::Ordering;
 
   std::fs::create_dir_all(dst)?;
   for entry in std::fs::read_dir(src)? {
     if cancel.load(Ordering::Relaxed) {
-      return Ok(());
+      return Ok(false);
     }
     let entry = entry?;
     let target = dst.join(entry.file_name());
-    if entry.file_type()?.is_dir() {
-      copy_dir_all(&entry.path(), &target, cancel, progress, on_progress)?;
+    let completed = if entry.file_type()?.is_dir() {
+      copy_dir_all(&entry.path(), &target, cancel, progress, on_progress)?
     } else {
-      copy_file(&entry.path(), &target, cancel, progress, on_progress)?;
+      copy_file(&entry.path(), &target, cancel, progress, on_progress)?
+    };
+    if !completed {
+      return Ok(false);
     }
   }
-  Ok(())
+  Ok(true)
 }
 
 /// コピー / 切り取りで保持している内容。
@@ -1128,6 +1144,58 @@ mod tests {
     transfer(&[s(&from.join("big.bin"))], &s(&to), true, &cancel, &mut |_, _| {}).unwrap();
 
     assert!(from.join("big.bin").exists(), "移動でも中断なら元は残る");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// 中断された項目を完了ペアとして返すと、トレイから実際には動いていない項目が消え、
+  /// undo にも存在しない転送が積まれる。
+  #[test]
+  fn cancelled_items_are_not_reported_as_completed() {
+    let root = scratch("cancel_report");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(from.join("small.txt"), b"x").unwrap();
+    std::fs::write(from.join("big.bin"), vec![7u8; 5 * 1024 * 1024]).unwrap();
+
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let pairs = transfer(
+      &[s(&from.join("small.txt")), s(&from.join("big.bin"))],
+      &s(&to),
+      // 移動だと同一ボリュームでは rename で一瞬に終わり、中断の余地が無い。
+      false,
+      &cancel,
+      &mut |p, current| {
+        if current.ends_with("big.bin") && p.files_done == 1 {
+          cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+      },
+    )
+    .unwrap();
+
+    assert_eq!(pairs.len(), 1, "完了したのは small.txt だけ");
+    assert_eq!(pairs[0].0, from.join("small.txt"));
+    assert!(!to.join("big.bin").exists(), "書きかけは残さない");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// フォルダを途中で止めたら、欠けたフォルダを転送先に残さない。
+  #[test]
+  fn cancelling_a_directory_copy_removes_the_partial_tree() {
+    let root = scratch("cancel_dir");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(from.join("d")).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(from.join("d/big.bin"), vec![7u8; 5 * 1024 * 1024]).unwrap();
+
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let pairs = transfer(&[s(&from.join("d"))], &s(&to), false, &cancel, &mut |_, _| {
+      cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    })
+    .unwrap();
+
+    assert!(pairs.is_empty());
+    assert!(!to.join("d").exists(), "書きかけのフォルダは消されているべき");
     let _ = std::fs::remove_dir_all(&root);
   }
 
