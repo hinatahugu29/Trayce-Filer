@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 /// 履歴の保持件数。多すぎると探すのに探す羽目になるので、この辺で頭打ちにする。
@@ -170,7 +172,15 @@ pub struct Store {
   state: Mutex<State>,
   /// 保存先。setup で決まるまでは None。
   file: Mutex<Option<PathBuf>>,
+  /// 書き込み係のスレッドへ「保存して」と伝える口。attach 前（テスト等）は None で、その場で書く。
+  saver: Mutex<Option<Sender<()>>>,
+  /// 書き込み係と終了時の flush が同じ一時ファイルを同時に触らないようにする。
+  write_lock: Mutex<()>,
 }
+
+/// 保存要求がこの時間途切れたら書く。
+/// セッション状態はタブやペインが少し変わるたびに届くので、毎回ディスクへ書かない。
+const SAVE_DEBOUNCE: Duration = Duration::from_millis(300);
 
 fn now_ms() -> u128 {
   std::time::SystemTime::now()
@@ -258,9 +268,40 @@ impl Store {
       }
     }
     *self.file.lock().unwrap() = Some(file);
+
+    let (tx, rx) = channel::<()>();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+      while rx.recv().is_ok() {
+        // 続けて届く要求はまとめて1回にする。
+        loop {
+          match rx.recv_timeout(SAVE_DEBOUNCE) {
+            Ok(()) => continue,
+            Err(RecvTimeoutError::Timeout) => break,
+            Err(RecvTimeoutError::Disconnected) => break,
+          }
+        }
+        handle.state::<Store>().save_now();
+      }
+    });
+    *self.saver.lock().unwrap() = Some(tx);
   }
 
-  fn save(&self) {
+  /// 保存を予約する。書き込み係がいなければその場で書く。
+  fn request_save(&self) {
+    let sent = self.saver.lock().unwrap().as_ref().map(|tx| tx.send(()).is_ok()).unwrap_or(false);
+    if !sent {
+      self.save_now();
+    }
+  }
+
+  /// 予約を待たずに書く。終了時に呼び、直前の変更を取りこぼさない。
+  pub fn flush(&self) {
+    self.save_now();
+  }
+
+  fn save_now(&self) {
+    let _writing = self.write_lock.lock().unwrap_or_else(|value| value.into_inner());
     let Some(file) = self.file.lock().unwrap().clone() else { return };
     let state = self.state.lock().unwrap().clone();
     let Ok(text) = serde_json::to_string_pretty(&state) else { return };
@@ -277,7 +318,7 @@ impl Store {
 
   fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
     let out = f(&mut self.state.lock().unwrap());
-    self.save();
+    self.request_save();
     out
   }
 

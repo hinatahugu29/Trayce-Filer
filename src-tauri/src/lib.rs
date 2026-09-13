@@ -185,6 +185,12 @@ pub fn run() {
       log_ui,
       overlay_hotkey
     ])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|app, event| {
+      // 保存は間引いて書いているので、終了時に未書き込みの変更を書き切る。
+      if let tauri::RunEvent::Exit = event {
+        app.state::<store::Store>().flush();
+      }
+    });
 }
