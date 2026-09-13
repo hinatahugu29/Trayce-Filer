@@ -23,7 +23,7 @@
   export let onOpenDirectory: (path: string) => void = () => {}
   export let onTrayToggle: (path: string) => void = () => {}
   export let onSplit: (path: string) => void = () => {}
-  export let onSplitSearch: (path: string) => void = () => {}
+  export let onSplitSearch: (path: string, search?: SavedSearchState) => void = () => {}
   export let onClose: () => void = () => {}
   export let onActivate: () => void = () => {}
   export let onHoverChange: (hovered: boolean) => void = () => {}
@@ -330,7 +330,7 @@
       case 'hoverSplitSearchPane':
         if (ev.repeat) break
         ev.preventDefault()
-        onSplitSearch(directoryPath)
+        onSplitSearch(directoryPath, search)
         break
       case 'hoverPreview':
         ev.preventDefault()
@@ -365,7 +365,7 @@
       <button type="button" title="選択項目の場所を表示" disabled={selection.length === 0} on:click={revealSelection}>⧉</button>
       <button type="button" title="通常のフォルダペインに戻す" on:click={() => onKindChange('directory')}>▣</button>
       <button type="button" title="このペインを左右に分割" on:click={() => onSplit(directoryPath)}>⫿</button>
-      <button class="search-split" type="button" title="同じ対象の検索ペインを隣に追加 (Shift+N)" on:click={() => onSplitSearch(directoryPath)}>⫿⌕</button>
+      <button class="search-split" type="button" title="同じ検索条件のペインを隣に追加 (Shift+N)" on:click={() => onSplitSearch(directoryPath, search)}>⫿⌕</button>
       {#if closable}<button type="button" title="このペインを閉じる" on:click={onClose}>✕</button>{/if}
     </div>
   </header>

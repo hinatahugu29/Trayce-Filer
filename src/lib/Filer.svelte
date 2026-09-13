@@ -160,7 +160,12 @@
     activeTabId = tabs[(idx + delta + tabs.length) % tabs.length].id
   }
 
-  function splitPane(afterId: number, path: string, kind: api.PaneKind = 'directory') {
+  function splitPane(
+    afterId: number,
+    path: string,
+    kind: api.PaneKind = 'directory',
+    searchSeed?: api.SavedSearchState,
+  ) {
     const tab = activeTab
     if (!tab) return
     const idx = tab.panes.findIndex((p) => p.id === afterId)
@@ -168,7 +173,15 @@
       id: nextPaneId++,
       kind,
       path,
-      search: kind === 'search' ? newSearchState(path) : undefined,
+      search: kind === 'search'
+        ? searchSeed
+          ? {
+              ...searchSeed,
+              scopePaths: [...searchSeed.scopePaths],
+              recentQueries: [...(searchSeed.recentQueries ?? [])],
+            }
+          : newSearchState(path)
+        : undefined,
     }
     tab.panes = [...tab.panes.slice(0, idx + 1), created, ...tab.panes.slice(idx + 1)]
     tab.activeId = created.id
@@ -492,7 +505,7 @@
                 syncWindowPath()
               }}
               onSplit={(path) => splitPane(pane.id, path)}
-              onSplitSearch={(path) => splitPane(pane.id, path, 'search')}
+              onSplitSearch={(path, search) => splitPane(pane.id, path, 'search', search)}
               onClose={() => closePane(pane.id)}
               onNote={note}
             />
