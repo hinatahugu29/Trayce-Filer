@@ -9,6 +9,7 @@ import {
   formatModified,
   joinPath,
   pathIdentity,
+  foldForSearch,
 } from './api'
 
 describe('splitPath', () => {
@@ -84,6 +85,26 @@ describe('pathIdentity', () => {
   it('末尾区切りを無視しつつドライブ根を壊さない', () => {
     expect(pathIdentity('C:\\Work\\')).toBe(pathIdentity('c:\\work'))
     expect(pathIdentity('C:\\')).toBe('c:\\')
+  })
+})
+
+describe('foldForSearch', () => {
+  it('英字の大文字小文字と全角半角を同一視する', () => {
+    expect(foldForSearch('ＡＢＣ　ｘｙｚ１２３')).toBe('abc xyz123')
+    expect(foldForSearch('Report.PDF')).toBe('report.pdf')
+  })
+
+  it('半角カナを全角にし、濁点・半濁点を合成する', () => {
+    expect(foldForSearch('ｶﾞｲﾄﾞ ﾊﾟﾝﾌ ﾃﾞｰﾀ ｳﾞｧ')).toBe('ガイド パンフ データ ヴァ')
+    expect(foldForSearch('ﾂﾞ ﾄﾞ ﾁﾞ ﾎﾟ')).toBe('ヅ ド ヂ ポ')
+  })
+
+  it('合成できない濁点は独立した記号として残す（Rust 側と同じ結果）', () => {
+    expect(foldForSearch('ｱﾞ')).toBe('ア゛')
+  })
+
+  it('全角で打った語が半角カナの名前に一致する', () => {
+    expect(foldForSearch('ｶﾀﾛｸﾞ_Draft.PDF').includes(foldForSearch('カタログ＿ＤＲＡＦＴ'))).toBe(true)
   })
 })
 

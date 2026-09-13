@@ -139,10 +139,14 @@
   const NO_ENTRIES: Entry[] = []
   $: allEntries = listing?.entries ?? NO_ENTRIES
 
-  /** フォルダ内の絞り込み。名前に対する部分一致。 */
+  /**
+   * フォルダ内の絞り込み。名前に対する部分一致。
+   * 大文字小文字・全角半角・半角カナは区別しない（検索ペインと同じ規則）。
+   */
   let filter = ''
-  $: entries = filter
-    ? allEntries.filter((e) => e.name.toLowerCase().includes(filter.toLowerCase()))
+  $: filterKey = api.foldForSearch(filter)
+  $: entries = filterKey
+    ? allEntries.filter((e) => api.foldForSearch(e.name).includes(filterKey))
     : allEntries
 
   /** いま監視を頼んでいる場所。移る時に必ず外して二重登録を防ぐ。 */

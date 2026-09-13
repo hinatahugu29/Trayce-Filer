@@ -282,7 +282,67 @@ where F: FnMut(Vec<Arc<CachedEntry>>, usize) {
   Ok((indexed, warnings))
 }
 
-fn normalize(value: &str) -> String { value.replace('\u{3000}', " ").to_lowercase() }
+/// 検索用に表記の揺れを畳む。名前・パスと検索語の両方に同じものを掛ける。
+///
+/// - 英字の大文字小文字
+/// - 全角英数記号（`Ａ`, `１`, `－`, `！`, `｜`）と半角
+/// - 全角空白と半角空白
+/// - 半角カナ（`ｶﾞ`）と全角カナ（`ガ`）
+///
+/// 全角の `！` `－` `｜` も半角になるので、日本語入力のまま除外や OR が書ける。
+/// 文字数が変わる変換（濁点の合成）はここでだけ行い、表示用の文字列は変えない。
+pub(crate) fn normalize(value: &str) -> String {
+  let mut out = String::with_capacity(value.len());
+  for ch in value.chars() {
+    let code = ch as u32;
+    let folded = match code {
+      0x3000 => ' ',
+      0xFF01..=0xFF5E => char::from_u32(code - 0xFEE0).unwrap_or(ch),
+      0xFF61..=0xFF9F => {
+        // 濁点・半濁点は直前のカナに合成する。
+        if code == 0xFF9E || code == 0xFF9F {
+          if let Some(prev) = out.pop() {
+            match compose_kana_mark(prev, code == 0xFF9F) {
+              Some(composed) => { out.push(composed); continue; }
+              None => out.push(prev),
+            }
+          }
+        }
+        HALFWIDTH_KANA.get((code - 0xFF61) as usize).copied().unwrap_or(ch)
+      }
+      _ => ch,
+    };
+    out.extend(folded.to_lowercase());
+  }
+  out
+}
+
+/// U+FF61〜U+FF9F の半角カナに対応する全角文字。
+const HALFWIDTH_KANA: [char; 63] = [
+  '。', '「', '」', '、', '・', 'ヲ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ャ', 'ュ', 'ョ', 'ッ', 'ー',
+  'ア', 'イ', 'ウ', 'エ', 'オ', 'カ', 'キ', 'ク', 'ケ', 'コ', 'サ', 'シ', 'ス', 'セ', 'ソ', 'タ',
+  'チ', 'ツ', 'テ', 'ト', 'ナ', 'ニ', 'ヌ', 'ネ', 'ノ', 'ハ', 'ヒ', 'フ', 'ヘ', 'ホ', 'マ', 'ミ',
+  'ム', 'メ', 'モ', 'ヤ', 'ユ', 'ヨ', 'ラ', 'リ', 'ル', 'レ', 'ロ', 'ワ', 'ン', '゛', '゜',
+];
+
+fn compose_kana_mark(base: char, handakuten: bool) -> Option<char> {
+  let code = base as u32;
+  if handakuten {
+    // ハ行だけが半濁点を取る（ハ=30CF, ヒ=30D2, フ=30D5, ヘ=30D8, ホ=30DB）。
+    return matches!(code, 0x30CF | 0x30D2 | 0x30D5 | 0x30D8 | 0x30DB).then(|| char::from_u32(code + 2)).flatten();
+  }
+  let composable = match code {
+    0x30A6 | 0x30EF | 0x30F2 => return Some(match code { 0x30A6 => 'ヴ', 0x30EF => 'ヷ', _ => 'ヺ' }),
+    // カ(30AB)〜チ(30C1): 清音と濁音が交互に並ぶ。
+    0x30AB..=0x30C1 => (code - 0x30AB) % 2 == 0,
+    // ッ(30C3)を挟み、ツ(30C4)〜ト(30C8)も交互。
+    0x30C4..=0x30C8 => (code - 0x30C4) % 2 == 0,
+    // ハ(30CF)〜ホ(30DB): 清音・濁音・半濁音の3つ組。
+    0x30CF..=0x30DB => (code - 0x30CF) % 3 == 0,
+    _ => false,
+  };
+  composable.then(|| char::from_u32(code + 1)).flatten()
+}
 
 /// 空白区切りの1語。`|` で並べた候補のどれかを含み、`!`/`-` の語をどれも含まない。
 /// 含む語と除く語を解析時に分けておき、全件に対する判定でメモリ確保をしない。
@@ -369,6 +429,26 @@ mod tests {
     assert!(!matches_query(&entry, &parse_query("blue !assets"), true));
     assert!(!matches_query(&entry, &parse_query("assets"), false));
     assert!(!matches_query(&entry, &parse_query("jpg|!icon"), false), "同じ語の中の除外も効く");
+  }
+
+  #[test]
+  fn normalize_folds_case_width_and_halfwidth_kana() {
+    assert_eq!(normalize("ＡＢＣ　ｘｙｚ１２３"), "abc xyz123");
+    assert_eq!(normalize("Report.PDF"), "report.pdf");
+    assert_eq!(normalize("ｶﾞｲﾄﾞ ﾊﾟﾝﾌ ﾃﾞｰﾀ ｳﾞｧ"), "ガイド パンフ データ ヴァ");
+    assert_eq!(normalize("ｱﾞ"), "ア゛", "合成できない濁点は独立した記号として残す");
+    assert_eq!(normalize("ﾂﾞ ﾄﾞ ﾁﾞ ﾎﾟ"), "ヅ ド ヂ ポ");
+  }
+
+  /// 全角で打った検索語・除外・OR が、半角の名前にも効くこと。
+  #[test]
+  fn query_matching_ignores_case_and_width_on_both_sides() {
+    let entry = CachedEntry::new(PathBuf::from(r"C:\資料\ｶﾀﾛｸﾞ_Draft2024.PDF"), false, None);
+    assert!(matches_query(&entry, &parse_query("カタログ ｐｄｆ"), false));
+    assert!(matches_query(&entry, &parse_query("DRAFT２０２４"), false));
+    assert!(!matches_query(&entry, &parse_query("カタログ　！draft"), false), "全角の！と全角空白でも除外になる");
+    assert!(!matches_query(&entry, &parse_query("カタログ －ｄｒａｆｔ"), false), "全角の－でも除外になる");
+    assert!(matches_query(&entry, &parse_query("xlsx｜ＰＤＦ"), false), "全角の｜でも OR になる");
   }
 
   fn entry(name: &str, size: u64) -> Arc<CachedEntry> {

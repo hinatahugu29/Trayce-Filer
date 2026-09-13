@@ -34,10 +34,11 @@
   }
 
   // 文字列で絞る（リスト表示時用）
+  // 大文字小文字・全角半角は区別しない（ペインの絞り込みや検索と同じ規則）。
   $: filtered = windows.filter((w) => {
-    const needle = query.toLowerCase()
+    const needle = api.foldForSearch(query)
     return [w.path, w.active_tab_label, ...w.panes.flatMap((pane) => [pane.path, pane.query])]
-      .some((value) => value.toLowerCase().includes(needle))
+      .some((value) => api.foldForSearch(value).includes(needle))
   })
   $: if (cursor >= filtered.length) cursor = Math.max(0, filtered.length - 1)
 

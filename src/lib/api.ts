@@ -32,6 +32,32 @@ export function pathIdentity(path: string): string {
     : normalized.replace(/\\+$/, '')
   return withoutTrailing.toLocaleLowerCase('en-US')
 }
+/** U+FF61〜U+FF9F の半角カナに対応する全角文字。Rust 側 search.rs と同じ表。 */
+const HALFWIDTH_KANA = '。「」、・ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン゛゜'
+
+/**
+ * 絞り込み用に表記の揺れを畳む。Rust の `search::normalize` と同じ規則。
+ *
+ * 英字の大文字小文字、全角英数記号と半角、全角空白、半角カナ（濁点合成を含む）を同一視する。
+ * 表示用の文字列には使わず、比較の両辺にだけ掛ける。
+ */
+export function foldForSearch(value: string): string {
+  // NFKC は全角英数・半角カナ・濁点合成をまとめて扱える。
+  // ただし `①`→`1` や `㍻`→`平成` まで畳むので、Rust 側と結果を揃えるため範囲を限る。
+  let out = ''
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!
+    if (code === 0x3000) out += ' '
+    else if (code >= 0xff01 && code <= 0xff5e) out += String.fromCodePoint(code - 0xfee0)
+    else if ((code === 0xff9e || code === 0xff9f) && out) {
+      const composed = (out.slice(-1) + (code === 0xff9e ? '゙' : '゚')).normalize('NFC')
+      out = composed.length === 1 ? out.slice(0, -1) + composed : out + HALFWIDTH_KANA[code - 0xff61]
+    } else if (code >= 0xff61 && code <= 0xff9f) out += HALFWIDTH_KANA[code - 0xff61]
+    else out += ch
+  }
+  return out.toLowerCase()
+}
+
 export type Listing = { path: string; parent: string | null; entries: Entry[] }
 
 export type SortKey = 'name' | 'size' | 'modified' | 'ext'

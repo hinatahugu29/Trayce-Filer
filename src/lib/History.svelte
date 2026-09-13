@@ -14,9 +14,11 @@
   let query = ''
 
   // 履歴は増えるので絞り込みが要る。パス全体に当てる。
+  // 大文字小文字・全角半角は区別しない（ペインの絞り込みや検索と同じ規則）。
+  $: needle = api.foldForSearch(query)
   $: filtered = items
     .map((entry, i) => ({ entry, exists: missing[i] !== false }))
-    .filter(({ entry }) => entry.path.toLowerCase().includes(query.toLowerCase()))
+    .filter(({ entry }) => api.foldForSearch(entry.path).includes(needle))
 
   async function clear() {
     await api.clearHistory()
