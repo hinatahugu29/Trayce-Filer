@@ -48,7 +48,22 @@ export const defaultSort = (): SortSpec => ({
   dirsFirst: true,
   showHidden: false,
 })
-export type WindowInfo = { label: string; path: string; last_focused: number; tray_paths: string[] }
+export type WindowPaneInfo = {
+  id: number
+  kind: PaneKind
+  path: string
+  query: string
+  is_active: boolean
+}
+export type WindowInfo = {
+  label: string
+  path: string
+  last_focused: number
+  tray_paths: string[]
+  active_tab_label: string
+  tab_count: number
+  panes: WindowPaneInfo[]
+}
 export type HistoryEntry = { path: string; at: number }
 
 export const listFavorites = () => invoke<string[]>('list_favorites')
@@ -290,6 +305,12 @@ export const registerWindow = (label: string, path: string) =>
   invoke<void>('register_window', { label, path })
 export const setWindowPath = (label: string, path: string) =>
   invoke<void>('set_window_path', { label, path })
+export const setWindowContext = (
+  label: string,
+  activeTabLabel: string,
+  tabCount: number,
+  panes: WindowPaneInfo[],
+) => invoke<void>('set_window_context', { label, activeTabLabel, tabCount, panes })
 export const setWindowTray = (label: string, paths: string[]) =>
   invoke<void>('set_window_tray', { label, paths })
 export const WINDOW_TRAY_CHANGED = 'window-tray-changed'

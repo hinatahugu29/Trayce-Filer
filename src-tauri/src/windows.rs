@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -24,6 +24,20 @@ pub struct WindowInfo {
   pub last_focused: u128,
   /// その窓で現在アクティブなタブの収集トレイ。
   pub tray_paths: Vec<String>,
+  /// 現在のタブ名と、そのタブに見えている全ペイン。
+  pub active_tab_label: String,
+  pub tab_count: usize,
+  pub panes: Vec<WindowPaneInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowPaneInfo {
+  pub id: u32,
+  pub kind: String,
+  pub path: String,
+  #[serde(default)]
+  pub query: String,
+  pub is_active: bool,
 }
 
 #[derive(Default)]
@@ -50,12 +64,44 @@ impl Registry {
         path: path.to_string(),
         last_focused: now_ms(),
         tray_paths: Vec::new(),
+        active_tab_label: path.to_string(),
+        tab_count: 1,
+        panes: vec![WindowPaneInfo {
+          id: 0,
+          kind: "directory".into(),
+          path: path.to_string(),
+          query: String::new(),
+          is_active: true,
+        }],
       },
     );
   }
 
   fn forget(&self, label: &str) {
     self.windows.lock().unwrap().remove(label);
+  }
+
+  fn set_context(
+    &self,
+    label: &str,
+    active_tab_label: String,
+    tab_count: usize,
+    panes: Vec<WindowPaneInfo>,
+  ) -> Option<String> {
+    let active_path = panes
+      .iter()
+      .find(|pane| pane.is_active)
+      .or_else(|| panes.first())
+      .map(|pane| pane.path.clone());
+    if let Some(info) = self.windows.lock().unwrap().get_mut(label) {
+      info.active_tab_label = active_tab_label;
+      info.tab_count = tab_count;
+      info.panes = panes;
+      if let Some(path) = &active_path {
+        info.path = path.clone();
+      }
+    }
+    active_path
   }
 
   fn is_empty(&self) -> bool {
@@ -129,6 +175,23 @@ pub fn set_window_path(app: AppHandle, label: String, path: String) {
     info.path = path.clone();
   }
   if let Some(win) = app.get_webview_window(&label) {
+    let _ = win.set_title(&path);
+  }
+}
+
+/// 現在タブの全ペインを俯瞰UIへ共有する。
+#[tauri::command]
+pub fn set_window_context(
+  app: AppHandle,
+  label: String,
+  active_tab_label: String,
+  tab_count: usize,
+  panes: Vec<WindowPaneInfo>,
+) {
+  let active_path = app
+    .state::<Registry>()
+    .set_context(&label, active_tab_label, tab_count, panes);
+  if let (Some(win), Some(path)) = (app.get_webview_window(&label), active_path) {
     let _ = win.set_title(&path);
   }
 }
@@ -341,5 +404,36 @@ mod tests {
     let sorted = reg.sorted();
     assert_eq!(sorted.len(), 1);
     assert_eq!(sorted[0].path, r"C:\b");
+  }
+
+  #[test]
+  fn context_keeps_every_visible_pane_and_uses_the_active_path() {
+    let reg = Registry::default();
+    reg.record("filer-1", r"C:\start");
+    let panes = vec![
+      WindowPaneInfo {
+        id: 4,
+        kind: "directory".into(),
+        path: r"C:\left".into(),
+        query: String::new(),
+        is_active: false,
+      },
+      WindowPaneInfo {
+        id: 5,
+        kind: "search".into(),
+        path: r"D:\assets".into(),
+        query: "icon".into(),
+        is_active: true,
+      },
+    ];
+    assert_eq!(
+      reg.set_context("filer-1", "Assets".into(), 3, panes.clone()),
+      Some(r"D:\assets".into())
+    );
+    let info = reg.sorted().pop().unwrap();
+    assert_eq!(info.path, r"D:\assets");
+    assert_eq!(info.active_tab_label, "Assets");
+    assert_eq!(info.tab_count, 3);
+    assert_eq!(info.panes, panes);
   }
 }
