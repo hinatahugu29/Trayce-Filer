@@ -45,6 +45,10 @@ results available as normal copy/move/preview/tray sources.
 - [x] Phase 14 — bring over advanced query/sort/history behavior from `File_Search_APP` selectively
 - [x] Search history follow-up — expose search-location history as a first-class navigation surface, separate from ordinary folder history and per-pane query history
 - [ ] Search follow-up — profile real-device performance before deciding whether parallel directory walking is beneficial
+- [x] Performance/correctness review — transfer cancellation reporting, search path identity, same-volume moves, incremental search filtering, timestamp preservation, debounced persistence, watcher starvation, listing sort allocations
+- [ ] Review follow-up — make trash undo lookup cheaper (`trash::os_limited::list()` enumerates the whole recycle bin on every delete)
+- [ ] Review follow-up — reduce per-entry search cache memory (four owned strings per entry) if multi-million-entry roots become common
+- [ ] Review follow-up — split `fs_ops.rs` (listing / transfer / clipboard / preview) and continue the gradual `Pane.svelte` extraction
 
 ## Current status
 
@@ -94,6 +98,15 @@ results available as normal copy/move/preview/tray sources.
 - The window registry now receives the active tab label, total tab count, and every visible pane's ID, kind, path, query, and active state. The compact overlay groups those panes beneath their owning window, includes pane context in filtering, and can focus a specific pane through a targeted cross-WebView event. Other tabs remain represented by count only to avoid flattening the hierarchy into an unreadable list.
 - Workbench window cards now contain a pane map for the active tab. Selecting a pane changes both the real Filer target and the card body; directory panes load their own mini listing, while search panes show their query/context without pretending to be directories. Directory pane tiles are explicit drop targets, including transfers between two panes in the same window, and search panes reject destination drops.
 - Workbench cards now receive every tab's ID, concrete display name, and active state. A horizontally scrollable tab strip replaces the vague “other N tabs” summary as the primary overview; selecting a name switches the real Filer tab, after which the card's pane map and mini listing refresh to that tab.
+- A speed/implementation review fixed eight issues without changing product behavior:
+  - Cancelled transfers are no longer reported as completed. `copy_file`/`copy_dir_all` return whether they finished; interrupted items never reach tray removal or undo, and a partial directory tree is removed from its freshly allocated destination.
+  - Search roots are stripped of the Windows `\\?\` prefix, so result paths share identity with directory panes, tray, and favorites.
+  - Moves try `rename` for directories as well as files, and total sizing skips same-volume move sources. Sizing no longer follows symlinks/junctions.
+  - The search worker keeps a local copy of the append-only cache, evaluates only newly indexed entries for an unchanged request, selects the top `limit` before sorting, suppresses no-op refresh events, and parses queries into allocation-free include/exclude lists. The scanner uses `DirEntry::metadata()` instead of an extra `fs::metadata` per file.
+  - Streaming copies apply the source modified time.
+  - `state.json` writes are coalesced by a writer thread (300 ms quiet period) and flushed on `RunEvent::Exit`.
+  - Directory watch reloads keep the 250 ms debounce but fire after at most 1 s of continuous changes.
+  - Listing sorts lowercase each name once instead of per comparison.
 - The Trayce visual identity is now applied to the Tauri icon set. `assets/branding/trayce-icon-source.png` is the retained 1024px source, and the generated PNG/ICO/ICNS plus platform icon variants live under `src-tauri/icons`. `build.rs` explicitly tracks the executable and window-icon sources so artwork-only changes rebuild the Windows resource instead of leaving Tauri's previously embedded default icon in development and release executables.
 
 ## Key integration points
@@ -184,6 +197,8 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Extended the same topology into Workbench cards. Added a selectable pane map, selected-pane content switching, search-pane context presentation, pane-specific drop targets, and same-window cross-pane transfers. Frontend diagnostics, 48 tests, production build, and diff checks passed; the unchanged Rust layer retains its 81 passing tests plus 1 ignored benchmark.
 - 2026-09-13: Replaced Workbench's opaque “other N tabs” description with all concrete tab names in a compact scrollable strip. Tab IDs and active state are shared through the registry, and choosing a tab from the card activates it in the owning Filer. Frontend diagnostics, 48 tests, production build, five focused window-registry tests, and diff checks passed.
 
+- 2026-09-13: Completed a speed and implementation review in eight focused commits (see Current status). Verification passed with 0 Svelte diagnostics, 48 frontend tests, 89 Rust tests (1 ignored benchmark), production build, and diff checks. Not yet exercised in the running app: the exit-time state flush and the incremental search worker on a large real root.
+
 ## Commit log
 
 - `3f37899` — `docs: add tray workbench implementation handover`
@@ -239,3 +254,14 @@ Each slice gets its own implementation commit followed by verification and a han
 - `393525e` — `docs: clarify pane-level workbench actions`
 - `05861b7` — `feat: share window tab summaries`
 - `e2f7fef` — `feat: switch named tabs from workbench cards`
+- `ae50d77` — `docs: record named workbench tabs`
+- `c260a50` — `feat: apply Trayce application icon`
+- `e3b1f4d` — `fix: rebuild Windows icon resources`
+- `aaba3d6` — `fix: stop reporting cancelled transfers as completed`
+- `4d1a6c7` — `fix: strip the \\?\ prefix from search result paths`
+- `2dec3d7` — `perf: rename directories when moving within a volume`
+- `fac11e9` — `perf: make search filtering incremental and allocation-free`
+- `b1ec657` — `fix: preserve modified time when copying files`
+- `9a37d9e` — `perf: debounce state.json writes and flush on exit`
+- `669d92f` — `fix: refresh directory listings during sustained file changes`
+- `f12411f` — `perf: lowercase names once when sorting listings`
