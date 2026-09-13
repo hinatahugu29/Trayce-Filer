@@ -34,7 +34,11 @@
   }
 
   // 文字列で絞る（リスト表示時用）
-  $: filtered = windows.filter((w) => w.path.toLowerCase().includes(query.toLowerCase()))
+  $: filtered = windows.filter((w) => {
+    const needle = query.toLowerCase()
+    return [w.path, w.active_tab_label, ...w.panes.flatMap((pane) => [pane.path, pane.query])]
+      .some((value) => value.toLowerCase().includes(needle))
+  })
   $: if (cursor >= filtered.length) cursor = Math.max(0, filtered.length - 1)
 
   async function refresh() {
@@ -238,11 +242,32 @@
               on:keydown={(e) => e.key === 'Enter' && pick(w)}
               on:mouseenter={() => (cursor = i)}
             >
-              <span class="band" />
-              <span class="text">
-                <span class="tail">{parts.tail}</span>
-                <span class="lead">{elideLeft(parts.lead)}</span>
-              </span>
+              <div class="window-row">
+                <span class="band" />
+                <span class="text">
+                  <span class="tail">{parts.tail || w.path}</span>
+                  <span class="lead">{w.active_tab_label}{w.tab_count > 1 ? ` · 他${w.tab_count - 1}タブ` : ''}</span>
+                </span>
+                <span class="pane-count">{w.panes.length}ペイン</span>
+              </div>
+              <div class="pane-children">
+                {#each w.panes as pane, paneIndex (`${w.label}-${pane.id}`)}
+                  {@const paneParts = splitPath(pane.path)}
+                  <button
+                    type="button"
+                    class:current={pane.is_active}
+                    title={pane.path}
+                    on:click|stopPropagation={() => pick(w)}
+                  >
+                    <span class="pane-kind">{pane.kind === 'search' ? '⌕' : '▣'}</span>
+                    <span class="pane-number">{paneIndex + 1}</span>
+                    <span class="pane-text">
+                      <strong>{pane.kind === 'search' && pane.query ? pane.query : paneParts.tail || pane.path}</strong>
+                      <small>{pane.kind === 'search' ? `検索 · ${elideLeft(pane.path, 28)}` : elideLeft(pane.path, 32)}</small>
+                    </span>
+                  </button>
+                {/each}
+              </div>
             </li>
           {/each}
 
@@ -491,12 +516,12 @@
 
   li {
     display: flex;
-    align-items: stretch;
-    gap: 10px;
-    padding: 7px 10px 7px 0;
+    flex-direction: column;
+    padding: 5px;
     border-radius: 6px;
     cursor: pointer;
   }
+  .window-row { display: flex; align-items: stretch; min-width: 0; gap: 10px; padding: 3px 5px 6px 0; }
   li.active {
     background: #274068;
   }
@@ -513,6 +538,17 @@
     display: flex;
     flex-direction: column;
   }
+  .pane-count { margin-left: auto; align-self: center; color: #78818c; font-size: 9px; white-space: nowrap; }
+  .pane-children { display: flex; flex-direction: column; gap: 2px; margin-left: 13px; padding-left: 8px; border-left: 1px solid #3b414a; }
+  .pane-children button { display: flex; min-width: 0; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 4px; background: transparent; padding: 5px 6px; color: #aeb5bd; text-align: left; cursor: pointer; }
+  .pane-children button:hover { background: #303743; color: #fff; }
+  .pane-children button.current { border-color: #486887; background: #27384c; }
+  .pane-kind { width: 14px; flex: none; color: #76a8db; text-align: center; }
+  .pane-number { width: 13px; height: 13px; flex: none; border-radius: 7px; background: #383e47; color: #9ba5af; font-size: 8px; line-height: 13px; text-align: center; }
+  .pane-text { display: flex; min-width: 0; flex: 1; flex-direction: column; }
+  .pane-text strong, .pane-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pane-text strong { color: inherit; font-size: 11px; font-weight: 500; }
+  .pane-text small { color: #737d86; font-size: 9px; }
   .tail {
     font-size: 14px;
     font-weight: 600;
