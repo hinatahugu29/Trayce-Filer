@@ -301,7 +301,7 @@
         <span class="sep">·</span>
         <span>👁️: 一時除外で疑似ペイン化</span>
         <span class="sep">·</span>
-        <span>他カードへD&D: ファイル移動 (Ctrl+D&Dでコピー)</span>
+        <span>通常ペインへD&D: ファイル移動 (Ctrl+D&Dでコピー)</span>
         <span class="sep">·</span>
         <span>Ctrl+P: ピン留め</span>
         <span class="sep">·</span>

@@ -475,7 +475,7 @@
             {selected?.kind === 'search' ? '検索ペイン' : cache?.entries ? `${cache.entries.length} 項目` : '…'}
           </span>
           <span class="dnd-hint">
-            {pinned ? '📌固定中 · ' : ''}他カードへD&Dで移動 / Ctrl+D&Dでコピー
+            {#if selected?.kind === 'search'}検索ペインは転送先にはできません{:else}{pinned ? '📌固定中 · ' : ''}通常ペインへD&Dで移動 / Ctrl+D&Dでコピー{/if}
           </span>
         </div>
       </div>
@@ -496,7 +496,7 @@
       <div class="collection-copy">
         <strong>◈ 収集トレイ</strong>
         <span>{traySource.tray_paths.length}件</span>
-        <small>カードへドラッグでコピー・Shiftを押しながらで移動</small>
+        <small>通常ペインへドラッグでコピー・Shiftを押しながらで移動</small>
       </div>
       <div
         class="collection-items"
@@ -508,7 +508,7 @@
             draggable="true"
             on:dragstart={(e) => handleTrayDragStart(traySource, [path], e)}
             on:dragend={handleDragEnd}
-            title="この項目だけ送り先カードへドラッグ"
+            title="この項目だけ送り先の通常ペインへドラッグ"
           >{splitPath(path).tail || path}</button>
         {/each}
         {#if traySource.tray_paths.length > 5}
@@ -520,7 +520,7 @@
           draggable="true"
           on:dragstart={(e) => handleTrayDragStart(traySource, traySource.tray_paths, e)}
           on:dragend={handleDragEnd}
-          title="トレイ全体を送り先カードへドラッグ"
+          title="トレイ全体を送り先の通常ペインへドラッグ"
         >全件を運ぶ ↗</button>
       </div>
     </div>
