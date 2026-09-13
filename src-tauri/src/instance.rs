@@ -16,7 +16,10 @@ use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const NAME: &str = "trayce-filer-instance";
+/// 開発ビルドは別の名前にする。配布版を常用しながら `tauri dev` で開発しても、
+/// 互いを「既に起動中」と見なして起動できなくなる事態を避ける。
+/// （保存先の state.json は同じなので、同時に使うと上書きし合う点は変わらない。）
+const NAME: &str = if cfg!(debug_assertions) { "trayce-filer-instance-dev" } else { "trayce-filer-instance" };
 const FOCUS: &[u8] = b"focus";
 
 /// 最初の1つであり続ける間、保持しておく。落とすとロックが外れる。
