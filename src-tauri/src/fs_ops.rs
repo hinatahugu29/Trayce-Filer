@@ -419,6 +419,11 @@ fn copy_file(
   }
 
   writer.flush()?;
+  // 自前コピーは更新日時を引き継がない（std::fs::copy / CopyFileEx は引き継ぐ）。
+  // 「さっきいじったやつ」を日時で探すファイラなので、コピーで日時が今に化けるのは困る。
+  if let Ok(modified) = reader.metadata().and_then(|meta| meta.modified()) {
+    let _ = writer.set_modified(modified);
+  }
   progress.files_done += 1;
   on_progress(progress, &label);
   Ok(true)
@@ -890,6 +895,26 @@ mod tests {
       "既存ファイルは残っていなければならない"
     );
     assert_eq!(std::fs::read(to.join("a (2).txt")).unwrap(), b"new");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[test]
+  fn copying_preserves_the_modified_time() {
+    let root = scratch("copy_mtime");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(from.join("d")).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+    for file in [from.join("a.txt"), from.join("d/b.txt")] {
+      std::fs::write(&file, b"x").unwrap();
+      std::fs::File::options().write(true).open(&file).unwrap().set_modified(old).unwrap();
+    }
+
+    accept_dropped(vec![s(&from.join("a.txt")), s(&from.join("d"))], s(&to), false).unwrap();
+
+    for file in [to.join("a.txt"), to.join("d/b.txt")] {
+      assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), old, "{} の日時が変わった", file.display());
+    }
     let _ = std::fs::remove_dir_all(&root);
   }
 
