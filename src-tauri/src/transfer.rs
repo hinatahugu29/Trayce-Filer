@@ -86,7 +86,7 @@ pub fn start_transfer(
       eta_secs: None,
       current: String::new(),
     });
-    let (files_total, bytes_total) = super::fs_ops::scan_total_pub(&paths, &dest, move_files);
+    let (files_total, bytes_total) = super::fs_ops::scan_total_pub(&paths, &dest, move_files, conflict);
 
     let start_time = Instant::now();
     let mut last_time = Instant::now() - Duration::from_secs(1);

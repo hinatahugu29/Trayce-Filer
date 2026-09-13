@@ -245,18 +245,6 @@ fn sort_entries(entries: &mut Vec<Entry>, sort: SortSpec) {
   *entries = order.into_iter().filter_map(|i| slots[i].take()).collect();
 }
 
-/// 落とされたファイル群を `dest` ディレクトリへ取り込む。
-///
-/// `move_files` が false ならコピー。既存ファイルは黙って上書きせず、
-/// `name (2).ext` のように退避名を作る。ファイラで黙って消えるのが一番怖いため。
-#[tauri::command]
-pub fn accept_dropped(paths: Vec<String>, dest: String, move_files: bool) -> Result<Vec<String>, String> {
-  // 進捗も中断も要らない経路。中断しない旗と何もしない通知を渡すだけ。
-  let never = std::sync::atomic::AtomicBool::new(false);
-  let pairs = transfer(&paths, &dest, move_files, &never, &mut |_, _| {})?;
-  Ok(pairs.into_iter().map(|(_, to)| to.to_string_lossy().to_string()).collect())
-}
-
 /// 転送先に同名の項目があった時の扱い。利用者が転送前に選ぶ。
 #[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -320,12 +308,21 @@ pub fn transfer_pub(
 
 /// 総量の事前集計。戻り値は (ファイル数, バイト数)。
 ///
-/// 移動で `dest` と同じボリュームにある項目は rename で済むため数えない。
-/// 巨大なフォルダを同じドライブ内で動かす時に、中身を全部舐める待ち時間を無くす。
-pub fn scan_total_pub(paths: &[String], dest: &str, move_files: bool) -> (u64, u64) {
+/// 次の項目は中身を書かないので数えない。数えると進捗が 100% に届かない。
+/// - 移動で `dest` と同じボリュームにあるもの（rename で済む）
+/// - 衝突時にスキップを選び、転送先に同名があるもの
+pub fn scan_total_pub(paths: &[String], dest: &str, move_files: bool, conflict: ConflictPolicy) -> (u64, u64) {
+  let dest_dir = Path::new(dest);
   let copied: Vec<String> = paths
     .iter()
-    .filter(|p| !(move_files && same_volume(Path::new(p), Path::new(dest))))
+    .filter(|p| {
+      let src = Path::new(p);
+      let renamed = move_files && same_volume(src, dest_dir);
+      let skipped = conflict == ConflictPolicy::Skip
+        && src.parent() != Some(dest_dir)
+        && src.file_name().is_some_and(|name| dest_dir.join(name).exists());
+      !renamed && !skipped
+    })
     .cloned()
     .collect();
   scan_total(&copied)
@@ -343,11 +340,12 @@ fn same_volume(a: &Path, b: &Path) -> bool {
   }
 }
 
-/// コピー / 移動の本体。
+/// コピー / 移動の本体（テスト用の入口。衝突は常に別名で置く）。
 ///
 /// `cancel` が立ったら速やかに諦める。`on_progress` は
 /// 「今どこまで進んだか」と「今どのファイルか」を受け取る。
 /// 戻り値は (元のパス, 作られたパス) のペア。
+#[cfg(test)]
 fn transfer(
   paths: &[String],
   dest: &str,
@@ -625,24 +623,6 @@ pub fn get_clipboard(app: tauri::AppHandle) -> ClipboardData {
   app.state::<Clipboard>().inner.lock().unwrap().clone()
 }
 
-/// クリップボードの内容を `dest` へ貼り付ける。戻り値は作られたパス。
-#[tauri::command]
-pub fn paste_clipboard(app: tauri::AppHandle, dest: String) -> Result<Vec<String>, String> {
-  use tauri::Manager;
-  let data = app.state::<Clipboard>().inner.lock().unwrap().clone();
-  if data.paths.is_empty() {
-    return Ok(Vec::new());
-  }
-
-  let created = accept_dropped(data.paths, dest, data.cut)?;
-
-  // 切り取りは一度しか貼れない。残すと二度目で「元が無い」エラーになる。
-  if data.cut {
-    *app.state::<Clipboard>().inner.lock().unwrap() = ClipboardData::default();
-  }
-  Ok(created)
-}
-
 /// 新しいフォルダを作る。名前が衝突したら退避名にする。戻り値は実際に作られたパス。
 #[tauri::command]
 pub fn create_folder(app: tauri::AppHandle, parent: String, name: String) -> Result<String, String> {
@@ -908,6 +888,32 @@ pub(crate) fn strip_unc(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// 落とされたファイル群を `dest` へ取り込む、同期のテスト用ヘルパー。戻り値は作られたパス。
+  ///
+  /// 以前は Tauri コマンドとしても公開していたが、進捗・中断・衝突の確認・undo のどれも通らない
+  /// 経路だったため削除した。画面からの転送はすべて `transfer::start_transfer` を使う。
+  fn accept_dropped(paths: Vec<String>, dest: String, move_files: bool) -> Result<Vec<String>, String> {
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let pairs = transfer(&paths, &dest, move_files, &never, &mut |_, _| {})?;
+    Ok(pairs.into_iter().map(|(_, to)| to.to_string_lossy().to_string()).collect())
+  }
+
+  #[test]
+  fn skipped_collisions_are_not_counted_in_totals() {
+    let root = scratch("scan_skip_conflict");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(from.join("same.bin"), vec![0u8; 100]).unwrap();
+    std::fs::write(from.join("new.bin"), vec![0u8; 7]).unwrap();
+    std::fs::write(to.join("same.bin"), b"old").unwrap();
+    let paths = [s(&from.join("same.bin")), s(&from.join("new.bin"))];
+
+    assert_eq!(scan_total_pub(&paths, &s(&to), false, ConflictPolicy::Rename), (2, 107));
+    assert_eq!(scan_total_pub(&paths, &s(&to), false, ConflictPolicy::Skip), (1, 7), "スキップされる分は書かない");
+    let _ = std::fs::remove_dir_all(&root);
+  }
 
   #[test]
   fn strips_windows_unc_prefix() {
@@ -1464,9 +1470,9 @@ mod tests {
     let root = scratch("scan_skip_move");
     std::fs::write(root.join("a.bin"), vec![0u8; 100]).unwrap();
     let paths = [s(&root.join("a.bin"))];
-    assert_eq!(scan_total_pub(&paths, &s(&root), false), (1, 100), "コピーは数える");
+    assert_eq!(scan_total_pub(&paths, &s(&root), false, ConflictPolicy::Rename), (1, 100), "コピーは数える");
     #[cfg(windows)]
-    assert_eq!(scan_total_pub(&paths, &s(&root), true), (0, 0), "同一ドライブの移動は数えない");
+    assert_eq!(scan_total_pub(&paths, &s(&root), true, ConflictPolicy::Rename), (0, 0), "同一ドライブの移動は数えない");
     let _ = std::fs::remove_dir_all(&root);
   }
 

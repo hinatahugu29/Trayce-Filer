@@ -141,7 +141,6 @@ export type ClipboardData = { paths: string[]; cut: boolean }
 export const setClipboard = (paths: string[], cut: boolean) =>
   invoke<void>('set_clipboard', { paths, cut })
 export const getClipboard = () => invoke<ClipboardData>('get_clipboard')
-export const pasteClipboard = (dest: string) => invoke<string[]>('paste_clipboard', { dest })
 
 export type ProgressEvent = {
   id: number
@@ -335,9 +334,6 @@ export const dragPreviewIcon = () => invoke<string>('drag_preview_icon')
  */
 export const overlayHotkey = () =>
   invoke<string>('overlay_hotkey').then((s) => s.replace('CmdOrCtrl', 'Ctrl'))
-
-export const acceptDropped = (paths: string[], dest: string, moveFiles: boolean) =>
-  invoke<string[]>('accept_dropped', { paths, dest, moveFiles })
 
 export const openWindow = (path: string) => invoke<string>('open_window', { path })
 export const listWindows = () => invoke<WindowInfo[]>('list_windows')
