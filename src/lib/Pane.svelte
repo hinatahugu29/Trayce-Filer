@@ -492,6 +492,25 @@
   /** ショートカット表記をメニューに添える。操作を覚えてもらう導線になる。 */
   const hint = (id: Parameters<typeof resolveKey>[0]) => resolveKey(id, settings.shortcuts)
 
+  /**
+   * 選択をトレイに入れる／外す項目。
+   * 選択が全部トレイにあれば「外す」、1つでも無ければ「入れる」（混在時に一部だけ外れる事故を避ける）。
+   */
+  function trayMenuItem(): MenuItem {
+    const keys = new Set(trayItems.map(api.pathIdentity))
+    const allIn = selection.length > 0 && selection.every((path) => keys.has(api.pathIdentity(path)))
+    return {
+      kind: 'item',
+      label: allIn ? 'トレイから外す' : 'トレイに入れる',
+      hint: 'Alt+クリック',
+      disabled: selection.length === 0,
+      run: () => {
+        if (allIn) onTrayRemoveMany(selection)
+        else selection.filter((path) => !keys.has(api.pathIdentity(path))).forEach(onTrayToggle)
+      },
+    }
+  }
+
   function openContextMenu(ev: MouseEvent, entry: Entry | null) {
     const n = selection.length
     const one = n === 1 ? selection[0] : null
@@ -506,6 +525,12 @@
               entry.is_dir ? open(full) : launch(entry, full)
             } },
           { kind: 'item', label: 'エクスプローラーで表示', run: revealSelection },
+          // フォルダを見つけた後に「この中から探す」へ一手で移る。元のペインは残す。
+          ...(entry.is_dir
+            ? ([{ kind: 'item', label: 'このフォルダ内を検索', hint: hint('hoverSplitSearchPane'), run: () => {
+                if (listing) onSplitSearch(api.joinPath(listing.path, entry.name))
+              } }] as MenuItem[])
+            : []),
           { kind: 'sep' },
           { kind: 'item', label: 'コピー', hint: hint('copy'), run: () => copySelection(false) },
           { kind: 'item', label: '切り取り', hint: hint('cut'), run: () => copySelection(true) },
@@ -513,6 +538,9 @@
           { kind: 'sep' },
           { kind: 'item', label: 'フルパスをコピー', hint: hint('copyPath'), run: copyFullPaths },
           { kind: 'item', label: '名前をコピー', run: copyNames },
+          { kind: 'sep' },
+          // Alt+クリックを知らなくても集められるように。選択全体に対して入れる／外す。
+          trayMenuItem(),
           { kind: 'sep' },
           { kind: 'item', label: 'ZIP に圧縮', hint: hint('zip'), run: zipSelection },
           // ZIP を選んでいる時だけ出す。常に出して無効化するより一覧が短くなる。
@@ -530,6 +558,9 @@
           { kind: 'sep' },
           { kind: 'item', label: 'このフォルダのパスをコピー', hint: hint('copyPath'), run: copyFullPaths },
           { kind: 'item', label: 'エクスプローラーで表示', run: revealSelection },
+          { kind: 'item', label: 'このフォルダ内を検索', hint: hint('hoverSplitSearchPane'), run: () => {
+              if (listing) onSplitSearch(listing.path)
+            } },
           { kind: 'sep' },
           { kind: 'item', label: '再読み込み', hint: hint('reload'), run: reload },
           { kind: 'item', label: sort.showHidden ? '隠しファイルを隠す' : '隠しファイルを表示', run: toggleHidden },

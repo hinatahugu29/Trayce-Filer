@@ -7,7 +7,9 @@
   import FileList from './FileList.svelte'
   import Preview from './Preview.svelte'
   import { splitPath } from './api'
-  import { matchAction } from './shortcuts'
+  import { matchAction, resolveKey } from './shortcuts'
+  import ContextMenu from './ContextMenu.svelte'
+  import type { MenuItem } from './ContextMenu.svelte'
 
   export let directoryPath: string
   export let search: SavedSearchState
@@ -260,6 +262,88 @@
     }
   }
 
+  /**
+   * 表示中の結果が今も実在するか確かめ直す。
+   *
+   * 検索結果は読み込んだ時点の一覧なので、別のペインや外部で移動・削除すると古いまま残る。
+   * ペインへ戻ってきた時（ポインターが入った時・窓が前面に来た時）に確かめれば、
+   * 消えたパスへ操作する前に一覧から消える。頻発しないよう間隔を空ける。
+   */
+  let lastRecheck = 0
+  function recheckResults() {
+    if (!requestId || results.length === 0) return
+    const now = Date.now()
+    if (now - lastRecheck < 1000) return
+    lastRecheck = now
+    api.recheckSearch(requestId).catch(() => {})
+  }
+
+  // ---- 右クリックメニュー ----
+
+  let menuAt: { x: number; y: number } | null = null
+  let menuItems: MenuItem[] = []
+  const hint = (id: Parameters<typeof resolveKey>[0]) => resolveKey(id, settings.shortcuts)
+
+  function copyNames() {
+    if (!selection.length) return
+    const names = selection.map((path) => splitPath(path).tail || path)
+    navigator.clipboard.writeText(names.join('\r\n')).then(
+      () => onNote(names.length > 1 ? `${names.length}件の名前をコピー` : `名前をコピー: ${names[0]}`),
+      (error) => onNote(`コピーできません: ${error}`),
+    )
+  }
+
+  /** 選択が全部トレイにあれば「外す」、1つでも無ければ「入れる」。 */
+  function trayMenuItem(): MenuItem {
+    const keys = new Set(trayItems.map(api.pathIdentity))
+    const allIn = selection.length > 0 && selection.every((path) => keys.has(api.pathIdentity(path)))
+    const targets = allIn ? selection : selection.filter((path) => !keys.has(api.pathIdentity(path)))
+    return {
+      kind: 'item',
+      label: allIn ? 'トレイから外す' : 'トレイに入れる',
+      hint: 'Alt+クリック',
+      disabled: selection.length === 0,
+      run: () => targets.forEach(onTrayToggle),
+    }
+  }
+
+  function openResultMenu(ev: MouseEvent, entry: api.Entry | null) {
+    if (!entry) {
+      menuItems = [
+        { kind: 'item', label: '再読み込み', hint: hint('reload'), run: () => runIndex() },
+        { kind: 'item', label: search.matchPath ? '名前だけを検索する' : 'フォルダのパスも検索する', run: toggleMatchPath },
+      ]
+      menuAt = { x: ev.clientX, y: ev.clientY }
+      return
+    }
+    const path = resultPath(entry)
+    const parent = resultParent(entry)
+    menuItems = [
+      entry.is_dir
+        ? { kind: 'item', label: 'このペインでフォルダを開く', run: () => onOpenDirectory(path) }
+        : { kind: 'item', label: '既定のアプリで開く', run: () => launch(entry, path) },
+      // 結果を見つけた後は「その場所」で作業したいことが多い。検索ペインは残して隣に開く。
+      { kind: 'item', label: '含まれるフォルダを隣に開く', disabled: !parent, run: () => onSplit(parent) },
+      { kind: 'item', label: 'エクスプローラーで表示', run: revealSelection },
+      { kind: 'sep' },
+      { kind: 'item', label: 'コピー', hint: hint('copy'), run: () => copySelection(false) },
+      { kind: 'item', label: '切り取り', hint: hint('cut'), run: () => copySelection(true) },
+      { kind: 'item', label: 'フルパスをコピー', hint: hint('copyPath'), run: copyPaths },
+      { kind: 'item', label: '名前をコピー', run: copyNames },
+      { kind: 'sep' },
+      trayMenuItem(),
+      ...(entry.is_dir
+        ? ([
+            { kind: 'sep' },
+            // 検索語はそのまま、場所だけを絞り込む。
+            { kind: 'item', label: 'このフォルダに絞って検索', run: () => revisitLocation([path]) },
+            { kind: 'item', label: 'このフォルダ内を隣で検索', hint: hint('hoverSplitSearchPane'), run: () => onSplitSearch(path) },
+          ] as MenuItem[])
+        : []),
+    ]
+    menuAt = { x: ev.clientX, y: ev.clientY }
+  }
+
   onMount(async () => {
     await refreshLocationHistory()
     unlistenProgress = await listen<api.SearchProgressEvent>(api.SEARCH_PROGRESS, ({ payload }) => {
@@ -342,7 +426,7 @@
   }
 </script>
 
-<svelte:window on:keydown={onPaneKey} />
+<svelte:window on:keydown={onPaneKey} on:focus={recheckResults} />
 
 <section
   class="search-pane"
@@ -350,7 +434,10 @@
   class:multi
   class:keyboard-target={keyboardTarget}
   on:pointerdown={onActivate}
-  on:pointerenter={() => onHoverChange(true)}
+  on:pointerenter={() => {
+    onHoverChange(true)
+    recheckResults()
+  }}
   on:pointerleave={() => onHoverChange(false)}
 >
   <header>
@@ -492,6 +579,7 @@
               onLaunch={launch}
               onSort={sortResults}
               onSelectionChange={(paths) => (selection = paths)}
+              onContext={openResultMenu}
               {onNote}
             />
           </div>
@@ -502,6 +590,7 @@
       {/if}
     </div>
   </div>
+  <ContextMenu items={menuItems} at={menuAt} onClose={() => (menuAt = null)} />
 </section>
 
 <style>
