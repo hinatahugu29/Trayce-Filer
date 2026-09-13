@@ -234,6 +234,7 @@ export type SavedSearchState = {
   sortDescending?: boolean
   dirsFirst?: boolean
   showPreview?: boolean
+  showHistory?: boolean
   recentQueries?: string[]
 }
 export type SavedPaneState = {

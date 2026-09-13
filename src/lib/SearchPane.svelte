@@ -35,6 +35,8 @@
   let results: api.SearchEntry[] = []
   let selection: string[] = []
   let showPreview = search.showPreview ?? settings.showPreview
+  let showHistory = search.showHistory ?? true
+  let locationHistory: api.SearchLocationEntry[] = []
   let sort: api.SortSpec = {
     key: search.sortKey ?? settings.sortKey,
     descending: search.sortDescending ?? settings.sortDescending,
@@ -103,6 +105,36 @@
     onSearchChange({ ...search, showPreview })
   }
 
+  function toggleHistory() {
+    showHistory = !showHistory
+    onSearchChange({ ...search, showHistory })
+  }
+
+  async function refreshLocationHistory() {
+    locationHistory = await api.listSearchLocations()
+  }
+
+  function locationLabel(paths: string[]): string {
+    const first = paths[0] ?? ''
+    const name = splitPath(first).tail || first
+    return paths.length > 1 ? `${name} ほか${paths.length - 1}か所` : name
+  }
+
+  async function revisitLocation(paths: string[]) {
+    onSearchChange({ ...search, scopePaths: paths })
+    await runIndex(paths)
+  }
+
+  async function forgetLocation(paths: string[]) {
+    await api.removeSearchLocation(paths)
+    await refreshLocationHistory()
+  }
+
+  async function clearLocationHistory() {
+    await api.clearSearchLocations()
+    locationHistory = []
+  }
+
   function nextRequestId(): string {
     return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
   }
@@ -129,6 +161,8 @@
     status = 'ファイルを読み込んでいます…'
     try {
       await api.startSearch(id, roots)
+      await api.recordSearchLocation(roots)
+      await refreshLocationHistory()
       requestFilter()
     } catch (error) {
       if (requestId !== id) return
@@ -213,6 +247,7 @@
   }
 
   onMount(async () => {
+    await refreshLocationHistory()
     unlistenProgress = await listen<api.SearchProgressEvent>(api.SEARCH_PROGRESS, ({ payload }) => {
       if (payload.id !== requestId) return
       scanned = payload.indexed
@@ -310,6 +345,7 @@
       <span class="scope" title={scope}>対象: {scopeLabel}</span>
     </div>
     <div class="actions">
+      <button type="button" title={showHistory ? '検索履歴を隠す' : '検索履歴を表示'} class:on={showHistory} on:click={toggleHistory}>履</button>
       <button type="button" title={showPreview ? 'プレビューを隠す' : 'プレビューを出す'} class:on={showPreview} on:click={togglePreview}>◐</button>
       <button type="button" title="選択項目をトレイへ追加・解除" disabled={selection.length === 0} on:click={() => selection.forEach(onTrayToggle)}>◈</button>
       <button type="button" title="選択項目の場所を表示" disabled={selection.length === 0} on:click={revealSelection}>⧉</button>
@@ -344,59 +380,88 @@
     {:else}
       <button type="button" disabled={!scope.trim()} title="検索対象をもう一度読み込む" on:click={() => runIndex()}>再読込</button>
     {/if}
-    {#if (search.recentQueries?.length ?? 0) > 0}
-      <select
-        aria-label="検索履歴"
-        title="このペインの検索履歴"
-        value=""
-        on:change={(event) => {
-          if (event.currentTarget.value) updateQuery(event.currentTarget.value)
-          event.currentTarget.value = ''
-        }}
-      >
-        <option value="">履歴</option>
-        {#each search.recentQueries ?? [] as query}<option value={query}>{query}</option>{/each}
-      </select>
-    {/if}
   </div>
 
   <div class="syntax"><span>空白: AND</span><span>|: OR</span><span>! または -: 除外</span></div>
 
-  <div class="status" class:searching={running}>
-    {status} · {results.length.toLocaleString()}件表示{#if truncated} / 一致 {matched.toLocaleString()}件{/if}
-  </div>
-  {#if results.length === 0}
-    <div class="empty">
-      <span class="mark">⌕</span>
-      <strong>{running ? '読み込み中…' : '一致する項目はありません'}</strong>
-      <p>{running ? `${scanned.toLocaleString()}件を読み込みました` : '検索語を変えると即座に絞り込みます。'}</p>
-      <small>入力中にリアルタイム絞り込み、Escapeで走査を停止</small>
-    </div>
-  {:else}
-    <div class="result-area">
-      <div class="list-slot">
-        <FileList
-          entries={listEntries}
-          parent={null}
-          path={`search:${requestId ?? 'idle'}`}
-          {dragIcon}
-          {sort}
-          {trayItems}
-          {onTrayToggle}
-          resolvePath={resultPath}
-          secondaryLabel={resultParent}
-          onOpen={onOpenDirectory}
-          onLaunch={launch}
-          onSort={sortResults}
-          onSelectionChange={(paths) => (selection = paths)}
-          {onNote}
-        />
+  <div class="workspace">
+    {#if showHistory}
+      <aside class="history-rail">
+        <section>
+          <div class="rail-heading">
+            <strong>検索した場所</strong>
+            {#if locationHistory.length}<button type="button" title="検索場所の履歴を消去" on:click={clearLocationHistory}>消去</button>{/if}
+          </div>
+          {#if locationHistory.length === 0}
+            <p class="rail-empty">検索すると、ここから同じ場所をもう一度調べられます。</p>
+          {:else}
+            <div class="rail-list">
+              {#each locationHistory as entry}
+                <div class="rail-item" class:current={entry.paths.join(';') === scopes.join(';')}>
+                  <button class="rail-main" type="button" title={entry.paths.join('\n')} on:click={() => revisitLocation(entry.paths)}>
+                    <span>⌕ {locationLabel(entry.paths)}</span>
+                    <small>{entry.paths.join(' ; ')}</small>
+                  </button>
+                  <button class="rail-remove" type="button" title="履歴から外す" aria-label="履歴から外す" on:click={() => forgetLocation(entry.paths)}>×</button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </section>
+
+        <section class="query-history">
+          <div class="rail-heading"><strong>検索した言葉</strong></div>
+          {#if (search.recentQueries?.length ?? 0) === 0}
+            <p class="rail-empty">検索語の履歴はまだありません。</p>
+          {:else}
+            <div class="query-chips">
+              {#each search.recentQueries ?? [] as query}
+                <button type="button" title={`「${query}」で絞り込む`} on:click={() => updateQuery(query)}>{query}</button>
+              {/each}
+            </div>
+          {/if}
+        </section>
+      </aside>
+    {/if}
+
+    <div class="results-column">
+      <div class="status" class:searching={running}>
+        {status} · {results.length.toLocaleString()}件表示{#if truncated} / 一致 {matched.toLocaleString()}件{/if}
       </div>
-      {#if showPreview}
-        <div class="preview-slot"><Preview path={selection.length === 1 ? selection[0] : null} /></div>
+      {#if results.length === 0}
+        <div class="empty">
+          <span class="mark">⌕</span>
+          <strong>{running ? '読み込み中…' : '一致する項目はありません'}</strong>
+          <p>{running ? `${scanned.toLocaleString()}件を読み込みました` : '検索語を変えると即座に絞り込みます。'}</p>
+          <small>入力中にリアルタイム絞り込み、Escapeで走査を停止</small>
+        </div>
+      {:else}
+        <div class="result-area">
+          <div class="list-slot">
+            <FileList
+              entries={listEntries}
+              parent={null}
+              path={`search:${requestId ?? 'idle'}`}
+              {dragIcon}
+              {sort}
+              {trayItems}
+              {onTrayToggle}
+              resolvePath={resultPath}
+              secondaryLabel={resultParent}
+              onOpen={onOpenDirectory}
+              onLaunch={launch}
+              onSort={sortResults}
+              onSelectionChange={(paths) => (selection = paths)}
+              {onNote}
+            />
+          </div>
+          {#if showPreview}
+            <div class="preview-slot"><Preview path={selection.length === 1 ? selection[0] : null} /></div>
+          {/if}
+        </div>
       {/if}
     </div>
-  {/if}
+  </div>
 </section>
 
 <style>
@@ -421,10 +486,29 @@
   input:focus { border-color: #63cfad; box-shadow: 0 0 0 1px rgba(99, 207, 173, 0.2); }
   .scope-input { border-color: transparent; background: transparent; color: #aab2b8; padding: 4px 6px; }
   .stop { border-color: #80504e; color: #f0aaa4; }
-  select { height: 26px; max-width: 82px; border: 1px solid #454b50; border-radius: 4px; background: #303438; color: #aeb7be; font-size: 10px; }
   .syntax { display: flex; gap: 12px; border-bottom: 1px solid #292d30; color: #67727a; font-size: 9px; padding: 2px 11px 5px; }
   .status { min-height: 18px; border-bottom: 1px solid #292d30; color: #89949c; font-size: 11px; padding: 4px 11px; }
   .status.searching { color: #63cfad; }
+  .workspace { display: flex; flex: 1; min-width: 0; min-height: 0; }
+  .results-column { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+  .history-rail { width: 220px; flex: none; overflow-y: auto; border-right: 1px solid #303438; background: #17191b; }
+  .history-rail section { padding: 10px 8px; }
+  .history-rail section + section { border-top: 1px solid #303438; }
+  .rail-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; color: #b9c2c9; font-size: 11px; }
+  .rail-heading button { height: 20px; border: 0; background: transparent; color: #77828a; font-size: 9px; }
+  .rail-empty { margin: 6px 2px; color: #69737a; font-size: 10px; line-height: 1.5; }
+  .rail-list { display: flex; flex-direction: column; gap: 2px; }
+  .rail-item { display: flex; min-width: 0; border-radius: 4px; }
+  .rail-item:hover { background: #252a2e; }
+  .rail-item.current { background: #253a38; }
+  .rail-main { display: flex; height: auto; min-width: 0; flex: 1; align-items: flex-start; flex-direction: column; gap: 2px; border: 0; background: transparent; padding: 5px 6px; text-align: left; }
+  .rail-main span, .rail-main small { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rail-main span { color: #d1d6da; font-size: 11px; }
+  .rail-main small { color: #68737b; font-size: 9px; }
+  .rail-remove { width: 22px; height: auto; flex: none; border: 0; background: transparent; color: #667078; opacity: 0; }
+  .rail-item:hover .rail-remove { opacity: 1; }
+  .query-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .query-chips button { max-width: 100%; height: 23px; overflow: hidden; border-color: #3b4247; background: #24282b; padding: 0 7px; color: #aeb8bf; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
   .empty { display: grid; flex: 1; place-content: center; justify-items: center; color: #7e8992; text-align: center; }
   .empty .mark { margin-bottom: 8px; color: #63cfad; font-size: 36px; }
   .empty strong { color: #c8ced3; }
@@ -433,4 +517,5 @@
   .result-area { display: flex; flex: 1; min-height: 0; }
   .list-slot { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; container-type: inline-size; }
   .preview-slot { width: 260px; min-width: 160px; border-left: 1px solid #2c2c2c; }
+  @media (max-width: 700px) { .history-rail { width: 180px; } }
 </style>

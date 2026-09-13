@@ -89,6 +89,7 @@ pub struct SavedSearchState {
   pub sort_descending: bool,
   pub dirs_first: bool,
   pub show_preview: Option<bool>,
+  pub show_history: Option<bool>,
   pub recent_queries: Vec<String>,
 }
 
@@ -102,6 +103,7 @@ impl Default for SavedSearchState {
       sort_descending: false,
       dirs_first: true,
       show_preview: None,
+      show_history: None,
       recent_queries: Vec::new(),
     }
   }
@@ -559,6 +561,7 @@ mod tests {
     assert!(!search.sort_descending);
     assert!(search.dirs_first);
     assert_eq!(search.show_preview, None);
+    assert_eq!(search.show_history, None);
     assert!(search.recent_queries.is_empty());
   }
 
