@@ -586,6 +586,21 @@
   const hint = (id: Parameters<typeof resolveKey>[0]) => resolveKey(id, settings.shortcuts)
 
   /**
+   * フォルダの中身の合計を数えて知らせる。
+   * 一覧ではフォルダの大きさを 0 にしている（開くだけで木全体を読まないため）ので、必要な時だけ数える。
+   */
+  async function measureFolder(path: string) {
+    const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path
+    onNote(`「${name}」の大きさを数えています…`)
+    try {
+      const { files, bytes } = await api.measureFolder(path)
+      onNote(`「${name}」: ${files.toLocaleString()} ファイル・${api.formatSize(bytes)}`)
+    } catch (e) {
+      onNote(`大きさを数えられません: ${e}`)
+    }
+  }
+
+  /**
    * 選択をトレイに入れる／外す項目。
    * 選択が全部トレイにあれば「外す」、1つでも無ければ「入れる」（混在時に一部だけ外れる事故を避ける）。
    */
@@ -620,9 +635,14 @@
           { kind: 'item', label: 'エクスプローラーで表示', run: revealSelection },
           // フォルダを見つけた後に「この中から探す」へ一手で移る。元のペインは残す。
           ...(entry.is_dir
-            ? ([{ kind: 'item', label: 'このフォルダ内を検索', hint: hint('hoverSplitSearchPane'), run: () => {
-                if (listing) onSplitSearch(api.joinPath(listing.path, entry.name))
-              } }] as MenuItem[])
+            ? ([
+                { kind: 'item', label: 'このフォルダ内を検索', hint: hint('hoverSplitSearchPane'), run: () => {
+                  if (listing) onSplitSearch(api.joinPath(listing.path, entry.name))
+                } },
+                { kind: 'item', label: '大きさを数える', run: () => {
+                  if (listing) measureFolder(api.joinPath(listing.path, entry.name))
+                } },
+              ] as MenuItem[])
             : []),
           { kind: 'sep' },
           { kind: 'item', label: 'コピー', hint: hint('copy'), run: () => copySelection(false) },
@@ -655,6 +675,9 @@
           { kind: 'item', label: 'エクスプローラーで表示', run: revealSelection },
           { kind: 'item', label: 'このフォルダ内を検索', hint: hint('hoverSplitSearchPane'), run: () => {
               if (listing) onSplitSearch(listing.path)
+            } },
+          { kind: 'item', label: 'このフォルダの大きさを数える', run: () => {
+              if (listing) measureFolder(listing.path)
             } },
           { kind: 'sep' },
           { kind: 'item', label: '再読み込み', hint: hint('reload'), run: reload },

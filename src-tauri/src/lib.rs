@@ -148,6 +148,7 @@ pub fn run() {
       fs_ops::trash_entries,
       fs_ops::complete_path,
       fs_ops::preview_entry,
+      fs_ops::measure_folder,
       fs_ops::set_clipboard,
       fs_ops::get_clipboard,
       watch::watch_dir,

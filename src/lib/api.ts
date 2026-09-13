@@ -159,6 +159,10 @@ export const applyBulkRename = (paths: string[], rule: RenameRule) =>
 /** ゴミ箱へ送る。完全削除は用意しない（誤操作で戻せないのを避けるため）。 */
 export const trashEntries = (paths: string[]) => invoke<number>('trash_entries', { paths })
 
+/** フォルダの中身の合計。大きな木では時間がかかる（別スレッドで数える）。 */
+export const measureFolder = (path: string) =>
+  invoke<{ files: number; bytes: number }>('measure_folder', { path })
+
 /** アドレスバーの補完候補。 */
 export const completePath = (input: string, showHidden = false) =>
   invoke<string[]>('complete_path', { input, showHidden })

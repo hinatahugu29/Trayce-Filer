@@ -537,6 +537,29 @@ fn scan_total(paths: &[String]) -> (u64, u64) {
   (files, bytes)
 }
 
+#[derive(Serialize)]
+pub struct FolderSize {
+  pub files: u64,
+  pub bytes: u64,
+}
+
+/// フォルダの中身の合計（ファイル数とバイト数）。一覧では 0 にしている大きさを、必要な時だけ数える。
+///
+/// 大きな木では時間がかかるので、IPC の処理を塞がないよう別スレッドで数える。
+/// リンクは辿らない（転送の集計と同じ規則）。
+#[tauri::command]
+pub async fn measure_folder(path: String) -> Result<FolderSize, String> {
+  if !Path::new(&path).is_dir() {
+    return Err(format!("{path} はフォルダではありません"));
+  }
+  tauri::async_runtime::spawn_blocking(move || {
+    let (files, bytes) = scan_total(&[path]);
+    FolderSize { files, bytes }
+  })
+  .await
+  .map_err(|e| format!("集計に失敗しました: {e}"))
+}
+
 /// 衝突したら `name (2).ext`, `name (3).ext` … と空きを探す。
 ///
 /// 空きが見つからなければエラーにする。以前は元の名前を返しており、
