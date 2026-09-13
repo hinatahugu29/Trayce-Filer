@@ -119,7 +119,7 @@ pub fn list_subdirs(path: String, show_hidden: Option<bool>) -> Result<Vec<Entry
     .filter(|e| show_hidden || !e.hidden)
     .collect();
 
-  dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+  dirs.sort_by_cached_key(|e| e.name.to_lowercase());
   Ok(dirs)
 }
 
@@ -206,8 +206,14 @@ fn is_hidden(name: &str, meta: Option<&std::fs::Metadata>) -> bool {
 
 /// 並べ替え。同値になった時は必ず名前で決着させ、順序がぶれないようにする。
 /// ぶれると、更新のたびに行が入れ替わって目で追えなくなる。
-fn sort_entries(entries: &mut [Entry], sort: SortSpec) {
-  entries.sort_by(|a, b| {
+///
+/// 比較のたびに `to_lowercase()` すると、数万件で数十万回の文字列確保になる。
+/// 小文字名は1件1回だけ作り、添字を並べ替えてから並びを確定させる。
+fn sort_entries(entries: &mut Vec<Entry>, sort: SortSpec) {
+  let lower: Vec<String> = entries.iter().map(|e| e.name.to_lowercase()).collect();
+  let mut order: Vec<usize> = (0..entries.len()).collect();
+  order.sort_by(|&i, &j| {
+    let (a, b) = (&entries[i], &entries[j]);
     if sort.dirs_first {
       let by_kind = b.is_dir.cmp(&a.is_dir);
       if by_kind != std::cmp::Ordering::Equal {
@@ -225,7 +231,7 @@ fn sort_entries(entries: &mut [Entry], sort: SortSpec) {
     let by_key = if sort.descending { by_key.reverse() } else { by_key };
 
     // 名前は最後の決着役。キーが名前の場合も降順を効かせる。
-    let by_name = a.name.to_lowercase().cmp(&b.name.to_lowercase());
+    let by_name = lower[i].cmp(&lower[j]);
     let by_name = if sort.descending && sort.key == SortKey::Name {
       by_name.reverse()
     } else {
@@ -234,6 +240,9 @@ fn sort_entries(entries: &mut [Entry], sort: SortSpec) {
 
     by_key.then(by_name)
   });
+
+  let mut slots: Vec<Option<Entry>> = std::mem::take(entries).into_iter().map(Some).collect();
+  *entries = order.into_iter().filter_map(|i| slots[i].take()).collect();
 }
 
 /// 落とされたファイル群を `dest` ディレクトリへ取り込む。
@@ -747,7 +756,7 @@ pub fn complete_path(input: String, show_hidden: Option<bool>) -> Vec<String> {
     .map(|e| e.path().to_string_lossy().to_string())
     .collect();
 
-  hits.sort_by_key(|p| p.to_lowercase());
+  hits.sort_by_cached_key(|p| p.to_lowercase());
   hits.truncate(20); // 出しすぎると選ぶのが手間になる
   hits
 }
