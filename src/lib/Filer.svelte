@@ -21,6 +21,8 @@
     path: string
     search?: api.SavedSearchState
     sidebar?: api.SavedSidebarState
+    /** 転送先として固定し、場所を変えないペイン。 */
+    pinned?: boolean
     ref?: Pane | SearchPane
   }
   /**
@@ -262,6 +264,35 @@
     tabs = tabs
   }
 
+  function togglePanePin(id: number) {
+    const pane = activeTab?.panes.find((candidate) => candidate.id === id)
+    if (!pane) return
+    pane.pinned = !pane.pinned
+    tabs = tabs
+    note(pane.pinned ? `固定: ${splitPath(pane.path).tail || pane.path}` : '固定を解除')
+  }
+
+  /**
+   * 固定中のペインで移動しようとした先を、別のペインで開く。
+   *
+   * 固定していない通常ペインがあればそこを移動させてアクティブにし、
+   * 無ければ固定ペインの隣に新しいペインを作る。固定した転送先は動かない。
+   */
+  function openFromPinned(fromId: number, path: string) {
+    const tab = activeTab
+    if (!tab) return
+    const target = tab.panes.find((pane) => pane.id !== fromId && pane.kind === 'directory' && !pane.pinned)
+    if (target?.ref && 'open' in target.ref) {
+      tab.activeId = target.id
+      tabs = tabs
+      ;(target.ref as Pane).open(path)
+      note(`固定中のため、別のペインで開きました: ${splitPath(path).tail || path}`)
+      return
+    }
+    splitPane(fromId, path)
+    note(`固定中のため、隣のペインで開きました: ${splitPath(path).tail || path}`)
+  }
+
   function closePane(id: number) {
     const tab = activeTab
     if (!tab || tab.panes.length <= 1) return // 最後の1枚は残す
@@ -356,6 +387,7 @@
       const panes = t.panes.map((p) => ({
         path: p.ref?.currentPath() || p.path,
         kind: p.kind,
+        pinned: p.pinned || undefined,
         search: p.search,
         sidebar: p.sidebar,
       }))
@@ -389,6 +421,7 @@
             id: nextPaneId++,
             kind: p.kind ?? 'directory',
             path: p.path,
+            pinned: p.pinned ?? false,
             search: p.search,
             sidebar: p.sidebar,
           }))
@@ -585,6 +618,9 @@
               onClose={() => closePane(pane.id)}
               onDetach={(path) => detachPane(pane.id, path)}
               onKindChange={(kind) => changePaneKind(pane.id, kind)}
+              pinned={!!pane.pinned}
+              onTogglePin={() => togglePanePin(pane.id)}
+              onPinnedNavigate={(path) => openFromPinned(pane.id, path)}
             />
           {/if}
         </div>

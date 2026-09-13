@@ -38,6 +38,13 @@
   export let onSplitSearch: (path: string) => void = () => {}
   export let onClose: () => void = () => {}
   export let onDetach: (path: string) => void = () => {}
+  /**
+   * 転送先として固定しているか。固定中は場所を変えず、移動しようとした先は
+   * `onPinnedNavigate` で別のペインに開いてもらう（探索側だけを動かす使い方のため）。
+   */
+  export let pinned = false
+  export let onTogglePin: () => void = () => {}
+  export let onPinnedNavigate: (path: string) => void = () => {}
   export let onKindChange: (kind: api.PaneKind) => void = () => {}
   export let onActivate: () => void = () => {}
   export let onHoverChange: (hovered: boolean) => void = () => {}
@@ -168,6 +175,12 @@
   const SLOW_LOAD_MS = 120
 
   export async function open(path: string) {
+    // パスバー・一覧・ツリー・履歴・Q キーはすべてここを通るので、固定の判定はここだけでよい。
+    // 表示前（起動直後）は固定していても最初の場所を開く。
+    if (pinned && listing && api.pathIdentity(path) !== api.pathIdentity(listing.path)) {
+      onPinnedNavigate(path)
+      return
+    }
     try {
       const t0 = performance.now()
       listing = await api.listDir(path, sort)
@@ -763,6 +776,17 @@
         on:click={toggleFavorite}
       >
         {isFavorite ? '★' : '☆'}
+      </button>
+      <button
+        type="button"
+        title={pinned
+          ? '固定を解除（このペインで移動できるようにする）'
+          : 'このペインを固定（移動しようとした先は別のペインで開く）'}
+        class:on={pinned}
+        aria-pressed={pinned}
+        on:click={onTogglePin}
+      >
+        📌
       </button>
       <button
         type="button"

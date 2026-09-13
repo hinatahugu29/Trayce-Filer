@@ -126,6 +126,9 @@ pub struct SavedPaneState {
   pub path: String,
   #[serde(default)]
   pub kind: PaneKind,
+  /// 転送先として固定し、移動させないペイン。古いセッションには無いので既定は false。
+  #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+  pub pinned: bool,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub search: Option<SavedSearchState>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -622,6 +625,19 @@ mod tests {
     assert_eq!(session.tabs[0].panes[0].kind, PaneKind::Directory);
     assert!(session.tabs[0].panes[0].search.is_none());
     assert!(session.tabs[0].panes[0].sidebar.is_none());
+  }
+
+  #[test]
+  fn pinned_panes_round_trip_and_default_to_unpinned() {
+    let session: SessionState = serde_json::from_str(
+      r#"{"tabs":[{"panes":[{"path":"C:\\dest","pinned":true},{"path":"C:\\browse"}],"activePaneIndex":1}],"activeTabIndex":0}"#,
+    )
+    .unwrap();
+    assert!(session.tabs[0].panes[0].pinned);
+    assert!(!session.tabs[0].panes[1].pinned, "古いセッションや未指定は固定しない");
+
+    let encoded = serde_json::to_string(&session).unwrap();
+    assert_eq!(encoded.matches("pinned").count(), 1, "固定していないペインには書かない");
   }
 
   #[test]

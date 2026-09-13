@@ -300,6 +300,8 @@ export type SavedSearchState = {
 export type SavedPaneState = {
   path: string
   kind?: PaneKind
+  /** 固定中のペインは移動しない。移動しようとした先は別のペインで開く。 */
+  pinned?: boolean
   search?: SavedSearchState
   sidebar?: SavedSidebarState
   selectedEntry?: string
