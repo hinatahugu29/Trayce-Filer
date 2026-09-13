@@ -48,6 +48,8 @@ results available as normal copy/move/preview/tray sources.
 - [x] Performance/correctness review — transfer cancellation reporting, search path identity, same-volume moves, incremental search filtering, timestamp preservation, debounced persistence, watcher starvation, listing sort allocations
 - [x] Functional review — preview head reads, no-overwrite on name exhaustion, single instance, width/case-insensitive filtering, collision choice dialog, last-closed-window session restore, stale search results, search/tray context menus
 - [ ] Functional follow-up — restore every open window (not only the last closed one) if multi-window restore becomes necessary
+- [x] Hardening and feature round — shared normalization fixture, Windows CI, overwrite undo, skip-aware totals, dev/release instance separation, shared collision prompt, removal of unused sync commands, search attribute filters, search folder exclusions, pane pinning, bulk rename, transfer queue (with early-event race fix), on-demand folder size, named trays
+- [ ] GUI follow-up — exercise in the running app: bulk rename dialog, pinned-pane redirection, queued transfers, named tray switching/persistence, overwrite followed by Ctrl+Z, search attribute filters and exclusions
 - [ ] Review follow-up — make trash undo lookup cheaper (`trash::os_limited::list()` enumerates the whole recycle bin on every delete)
 - [ ] Review follow-up — reduce per-entry search cache memory (four owned strings per entry) if multi-million-entry roots become common
 - [ ] Review follow-up — split `fs_ops.rs` (listing / transfer / clipboard / preview) and continue the gradual `Pane.svelte` extraction
@@ -118,7 +120,7 @@ results available as normal copy/move/preview/tray sources.
   - Every Filer window saves its session with its label; the store keeps one per window and promotes a window's session to `last_session` on `Destroyed`, before unregistering can exit the app. Main restores the last closed window next launch.
   - The search worker verifies existence only for rows it is about to show, drops and backfills missing ones, and remembers them. `recheck_search` forces a re-emit; the pane calls it on pointer enter and window focus (throttled to 1 s).
   - Search results gained a context menu (open, open containing folder beside, reveal, copy/cut/path/name, tray toggle, narrow search to folder, search folder beside). Directory panes gained "search inside this folder" and a tray toggle.
-  - Checked and left as is: pane paste already uses the background transfer pipeline; `paste_clipboard`/`accept_dropped` remain unused synchronous commands.
+  - Checked: pane paste already used the background transfer pipeline. The unused synchronous `paste_clipboard`/`accept_dropped` commands were later removed (`48962b0`).
 - The Trayce visual identity is now applied to the Tauri icon set. `assets/branding/trayce-icon-source.png` is the retained 1024px source, and the generated PNG/ICO/ICNS plus platform icon variants live under `src-tauri/icons`. `build.rs` explicitly tracks the executable and window-icon sources so artwork-only changes rebuild the Windows resource instead of leaving Tauri's previously embedded default icon in development and release executables.
 
 ## Key integration points
@@ -211,6 +213,8 @@ Each slice gets its own implementation commit followed by verification and a han
 
 - 2026-09-13: Completed a speed and implementation review in eight focused commits (see Current status). Verification passed with 0 Svelte diagnostics, 48 frontend tests, 89 Rust tests (1 ignored benchmark), production build, and diff checks. Not yet exercised in the running app: the exit-time state flush and the incremental search worker on a large real root.
 - 2026-09-13: Completed the functional review in eight commits (see Current status) and updated `SPEC.md`. Verification passed with 0 Svelte diagnostics, 52 frontend tests, 102 Rust tests (1 ignored benchmark), production build, and diff checks. Not yet exercised in the running app: the conflict dialog flow end to end, second-launch focus hand-off, and session restore after closing a detached window last.
+- 2026-09-13: Ran automated GUI verification against a release build (PrintWindow capture plus synthetic input, with `state.json` backed up and later restored by hash). Confirmed in the running app: a second launch exits with code 0 and leaves one process, full-width katakana typed into the folder filter matches a half-width katakana file, and the collision dialog appears with the colliding name. The dialog showed focused and hovered choices identically, fixed in `519006c`. The run was stopped when later clicks and a paste landed on another maximized application (the Claude desktop app) because the desktop was in use; Filer had exited normally (exit-time state flush observed, no crash events). Skip/keep-both results from that run are not treated as verified.
+- 2026-09-13: Completed the hardening and feature round in fourteen commits: shared Rust/TypeScript normalization fixture and Windows CI; overwrite undo restoring Recycle Bin originals; skip-aware progress totals and removal of unused synchronous commands; separate dev/release single-instance locks; shared collision prompt; search `ext:`/`size:`/`modified:`/`type:` filters; configurable search folder exclusions; pane pinning with navigation redirection; bulk rename with preview, two-phase apply, rollback, and single-step undo; per-pane transfer queue, including a fix for completion events that arrived before `start_transfer` returned; on-demand folder size; named trays per tab with backward-compatible sessions. Verification passed with 0 Svelte diagnostics, 57 frontend tests, 115 Rust tests (1 ignored benchmark), production build, and diff checks.
 
 ## Commit log
 
@@ -287,3 +291,17 @@ Each slice gets its own implementation commit followed by verification and a han
 - `316f10e` — `feat: ask how to handle name collisions before transferring`
 - `c8cc2ab` — `fix: drop search results that no longer exist`
 - `d3dd024` — `feat: add search and tray actions to context menus`
+- `bd23bba` — `docs: record functional review and updated product behavior`
+- `5ef37c5` — `test: share normalization cases and add CI`
+- `519006c` — `fix: distinguish focused and hovered collision choices`
+- `5e3f860` — `fix: let development and release builds run side by side`
+- `f1ae187` — `refactor: share the transfer collision prompt`
+- `c88683d` — `fix: restore overwritten items when undoing a transfer`
+- `48962b0` — `fix: count only written items in transfer totals; drop unused sync commands`
+- `b52533e` — `feat: filter search results by extension, size, date, and kind`
+- `35f4c44` — `feat: skip configurable folders when indexing searches`
+- `b5ee38c` — `feat: pin a pane as a fixed transfer destination`
+- `3e842a7` — `feat: rename many files at once with a live preview`
+- `71030ac` — `feat: queue pane transfers instead of losing the running one`
+- `9405951` — `feat: measure folder sizes on demand`
+- `be9e2bb` — `feat: keep several named collection trays per tab`
