@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 /// このラベルの窓だけはファイラではなく一覧UIを描く。
 pub const OVERLAY_LABEL: &str = "overlay";
 pub const WINDOW_TRAY_CHANGED: &str = "window-tray-changed";
+pub const ACTIVATE_PANE_REQUEST: &str = "activate-pane-request";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,6 +166,15 @@ pub fn focus_window(app: AppHandle, label: String) -> Result<(), String> {
     info.last_focused = now_ms();
   }
   Ok(())
+}
+
+/// 指定ペインを選んでから、その窓を前面へ出す。
+#[tauri::command]
+pub fn focus_pane(app: AppHandle, label: String, pane_id: u32) -> Result<(), String> {
+  app
+    .emit_to(&label, ACTIVATE_PANE_REQUEST, pane_id)
+    .map_err(|error| error.to_string())?;
+  focus_window(app, label)
 }
 
 /// 窓がディレクトリを移動したことを登録する。

@@ -297,6 +297,8 @@ export const acceptDropped = (paths: string[], dest: string, moveFiles: boolean)
 export const openWindow = (path: string) => invoke<string>('open_window', { path })
 export const listWindows = () => invoke<WindowInfo[]>('list_windows')
 export const focusWindow = (label: string) => invoke<void>('focus_window', { label })
+export const focusPane = (label: string, paneId: number) =>
+  invoke<void>('focus_pane', { label, paneId })
 /** `open_window` で指定された初期パス。main 窓など未登録の場合は null。 */
 export const windowInitialPath = (label: string) =>
   invoke<string | null>('window_initial_path', { label })
@@ -314,6 +316,7 @@ export const setWindowContext = (
 export const setWindowTray = (label: string, paths: string[]) =>
   invoke<void>('set_window_tray', { label, paths })
 export const WINDOW_TRAY_CHANGED = 'window-tray-changed'
+export const ACTIVATE_PANE_REQUEST = 'activate-pane-request'
 export type WindowTrayChanged = { label: string; paths: string[] }
 export const touchWindow = (label: string) => invoke<void>('touch_window', { label })
 export const hideOverlay = () => invoke<void>('hide_overlay')

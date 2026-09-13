@@ -326,6 +326,7 @@
   let unlistenDrop: UnlistenFn | null = null
   let unlistenFocus: UnlistenFn | null = null
   let unlistenTray: UnlistenFn | null = null
+  let unlistenActivatePane: UnlistenFn | null = null
 
   /** 起動に失敗した理由。ここが埋まる時は画面が空のままになるので必ず見せる。 */
   let bootError: string | null = null
@@ -430,12 +431,21 @@
       activeTab.trayItems = ev.payload.paths
       tabs = tabs
     })
+    unlistenActivatePane = await listen<number>(api.ACTIVATE_PANE_REQUEST, ({ payload }) => {
+      const tab = activeTab
+      if (!tab || !tab.panes.some((pane) => pane.id === payload)) return
+      tab.activeId = payload
+      hoveredPaneId = null
+      tabs = tabs
+      syncWindowContext()
+    })
   }
 
   onDestroy(() => {
     unlistenDrop?.()
     unlistenFocus?.()
     unlistenTray?.()
+    unlistenActivatePane?.()
   })
 </script>
 

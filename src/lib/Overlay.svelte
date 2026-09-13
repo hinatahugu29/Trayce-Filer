@@ -67,6 +67,17 @@
     }
   }
 
+  async function pickPane(w: WindowInfo, pane: api.WindowPaneInfo) {
+    await api.focusPane(w.label, pane.id)
+    if (!pinned) {
+      await api.hideOverlay()
+    } else {
+      const name = splitPath(pane.path).tail || pane.path
+      showNote(`「${pane.kind === 'search' && pane.query ? pane.query : name}」ペインを選択`)
+      await refresh()
+    }
+  }
+
   // ウィンドウを閉じる
   async function handleCloseWindow(label: string) {
     try {
@@ -257,7 +268,7 @@
                     type="button"
                     class:current={pane.is_active}
                     title={pane.path}
-                    on:click|stopPropagation={() => pick(w)}
+                    on:click|stopPropagation={() => pickPane(w, pane)}
                   >
                     <span class="pane-kind">{pane.kind === 'search' ? '⌕' : '▣'}</span>
                     <span class="pane-number">{paneIndex + 1}</span>

@@ -149,6 +149,7 @@ pub fn run() {
       windows::open_window,
       windows::list_windows,
       windows::focus_window,
+      windows::focus_pane,
       windows::set_window_path,
       windows::set_window_context,
       windows::set_window_tray,
