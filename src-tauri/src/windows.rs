@@ -189,6 +189,15 @@ pub fn focus_pane(app: AppHandle, label: String, pane_id: u32) -> Result<(), Str
   focus_window(app, label)
 }
 
+/// 指定タブへ切り替えてから、その窓を前面へ出す。
+#[tauri::command]
+pub fn focus_tab(app: AppHandle, label: String, tab_id: u32) -> Result<(), String> {
+  app
+    .emit_to(&label, ACTIVATE_TAB_REQUEST, tab_id)
+    .map_err(|error| error.to_string())?;
+  focus_window(app, label)
+}
+
 /// 窓がディレクトリを移動したことを登録する。
 /// タイトルバーにもパスを出しておくと、タスクバーのプレビューからも判別できる。
 #[tauri::command]

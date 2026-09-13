@@ -332,6 +332,7 @@
   let unlistenFocus: UnlistenFn | null = null
   let unlistenTray: UnlistenFn | null = null
   let unlistenActivatePane: UnlistenFn | null = null
+  let unlistenActivateTab: UnlistenFn | null = null
 
   /** 起動に失敗した理由。ここが埋まる時は画面が空のままになるので必ず見せる。 */
   let bootError: string | null = null
@@ -444,6 +445,12 @@
       tabs = tabs
       syncWindowContext()
     })
+    unlistenActivateTab = await listen<number>(api.ACTIVATE_TAB_REQUEST, ({ payload }) => {
+      if (!tabs.some((tab) => tab.id === payload)) return
+      activeTabId = payload
+      hoveredPaneId = null
+      tabs = tabs
+    })
   }
 
   onDestroy(() => {
@@ -451,6 +458,7 @@
     unlistenFocus?.()
     unlistenTray?.()
     unlistenActivatePane?.()
+    unlistenActivateTab?.()
   })
 </script>
 

@@ -78,6 +78,17 @@
     }
   }
 
+  async function pickTab(w: WindowInfo, tab: api.WindowTabInfo) {
+    await api.focusTab(w.label, tab.id)
+    if (!pinned) {
+      await api.hideOverlay()
+    } else {
+      showNote('「' + tab.label + '」タブを選択')
+      // 対象WebViewがタブを切り替え、ペイン構成を再送する短い猶予を置く。
+      window.setTimeout(refresh, 40)
+    }
+  }
+
   // ウィンドウを閉じる
   async function handleCloseWindow(label: string) {
     try {
@@ -229,6 +240,7 @@
         {pinned}
         onSelectWindow={pick}
         onSelectPane={pickPane}
+        onSelectTab={pickTab}
         onCloseWindow={handleCloseWindow}
         onNote={showNote}
       />

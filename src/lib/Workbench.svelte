@@ -11,6 +11,7 @@
   export let pinned: boolean = false
   export let onSelectWindow: (w: WindowInfo) => void
   export let onSelectPane: (w: WindowInfo, pane: WindowPaneInfo) => void
+  export let onSelectTab: (w: WindowInfo, tab: api.WindowTabInfo) => void
   export let onCloseWindow: (label: string) => void
   export let onNote: (msg: string) => void = () => {}
 
@@ -393,6 +394,20 @@
           </div>
         </div>
 
+        <div class="tab-map" aria-label="このウィンドウのタブ">
+          {#each w.tabs as tab (`${w.label}-tab-${tab.id}`)}
+            <button
+              type="button"
+              class:active-tab={tab.is_active}
+              title={tab.label}
+              on:click|stopPropagation={() => onSelectTab(w, tab)}
+            >
+              <span>{tab.is_active ? '●' : '○'}</span>
+              <strong>{tab.label}</strong>
+            </button>
+          {/each}
+        </div>
+
         <div class="pane-map" aria-label="現在のタブのペイン">
           {#each w.panes as pane, paneIndex (`${w.label}-${pane.id}`)}
             {@const paneParts = splitPath(pane.path)}
@@ -701,6 +716,12 @@
     flex: none;
   }
   .pane-map { display: flex; gap: 5px; padding: 6px 8px; border-bottom: 1px solid #303035; background: #1b1b1e; }
+  .tab-map { display: flex; flex: none; gap: 4px; overflow-x: auto; padding: 5px 8px 0; background: #1b1b1e; scrollbar-width: thin; }
+  .tab-map button { display: inline-flex; max-width: 150px; height: 23px; flex: none; align-items: center; gap: 5px; border: 1px solid #34373d; border-bottom-color: #454a52; border-radius: 5px 5px 2px 2px; background: #222328; padding: 0 7px; color: #78828b; cursor: pointer; }
+  .tab-map button:hover { border-color: #555d68; color: #d9dde1; }
+  .tab-map button.active-tab { border-color: #4c9aff; background: #26384d; color: #7fbaef; }
+  .tab-map span { flex: none; font-size: 7px; }
+  .tab-map strong { overflow: hidden; color: inherit; text-overflow: ellipsis; white-space: nowrap; font-size: 9.5px; font-weight: 600; }
   .pane-map button { display: grid; min-width: 0; flex: 1; grid-template-columns: auto 1fr; gap: 1px 5px; border: 1px solid #363940; border-radius: 5px; background: #242529; padding: 5px 7px; color: #89939c; text-align: left; cursor: pointer; }
   .pane-map button:hover { border-color: #525965; background: #2b2d32; }
   .pane-map button.selected { border-color: #4c9aff; background: #26384d; color: #8fc1f5; }
