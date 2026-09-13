@@ -24,6 +24,7 @@ results available as normal copy/move/preview/tray sources.
 - Do not replace `Space` quick preview with a shortcut layer.
 - Prefer existing transfer, progress, cancellation, collision handling, and undo paths.
 - Never remove a tray item merely because a transfer was attempted; update it from the actual result.
+- Keep `SPEC.md` as the product-facing source for human/AI interviews; keep implementation chronology and engineering detail in this handover.
 
 ## Planned phases
 
@@ -89,6 +90,7 @@ results available as normal copy/move/preview/tray sources.
 - Search panes now show a visible history rail by default. Search-location history is global, persistent, deduplicated case-insensitively on Windows, capped at 15 entries, and kept separate from ordinary navigation history. Selecting a previous location preserves the current search word and immediately re-indexes that location.
 - The same rail exposes the pane-local search-word history as direct buttons and the normal Filer favorites as reusable search locations. A single current root can be added to or removed from favorites in place. The `履` toolbar action collapses the rail, and that choice persists with the search pane.
 - Splitting from a search pane now clones its roots, query, sort, matching, preview/history presentation, and recent words into an independent new pane. This makes side-by-side variations possible without rebuilding the search context; directory-to-search splitting still starts with a clean search scoped to that directory.
+- `SPEC.md` now provides a product-facing description of the Tauri Filer, separating implemented behavior, design principles, candidate directions, non-goals, interview questions, and reusable prompts for consulting other AI systems.
 
 ## Key integration points
 
@@ -173,6 +175,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Made sidebar tree folder-name activation bidirectional. Repeated clicks now expand and collapse the folder while retaining normal navigation. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 77 Rust tests (1 ignored benchmark), production build, and diff checks.
 - 2026-09-13: Added an optional stacked sidebar. The normal four-tab header remains unchanged until the `↕` action is used; split sections use compact independent selectors and a draggable horizontal divider. Per-pane layout persistence is backward compatible. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 78 Rust tests (1 ignored benchmark), production build, and diff checks.
 - 2026-09-13: Completed the accessible search-history track in four isolated changes: persistent search-location storage, a visible search history rail, favorite-folder reuse from search, and context-preserving search splits. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 80 Rust tests (1 ignored benchmark), production build, and diff checks.
+- 2026-09-13: Added `SPEC.md` as the product and interview document. It deliberately avoids treating roadmap ideas as implemented requirements and points engineering follow-ups back to this handover.
 
 ## Commit log
 
@@ -217,3 +220,5 @@ Each slice gets its own implementation commit followed by verification and a han
 - `2fdd448` — `feat: expose search history in search panes`
 - `cb9bbf2` — `feat: search favorite locations from history rail`
 - `d1f4d2f` — `fix: preserve search context when splitting`
+- `fcbd1dd` — `docs: record search history workflow`
+- `e2f0164` — `docs: add product specification`
