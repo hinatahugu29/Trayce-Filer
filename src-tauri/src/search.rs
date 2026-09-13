@@ -199,7 +199,10 @@ where F: FnMut(Vec<Arc<CachedEntry>>, usize) {
     let path = Path::new(root);
     if !path.is_dir() { return Err(format!("検索対象を開けません: {root}")); }
     let canonical = path.canonicalize().map_err(|error| format!("検索対象を開けません: {root} ({error})"))?;
-    if seen.insert(canonical.to_string_lossy().to_lowercase()) { stack.push(canonical); }
+    // canonicalize は Windows で `\\?\` を付ける。そのまま走査すると結果の全パスに付き、
+    // 通常ペイン・トレイ・お気に入りの同じファイルと別物扱いになる。
+    let plain = PathBuf::from(crate::fs_ops::strip_unc(&canonical));
+    if seen.insert(plain.to_string_lossy().to_lowercase()) { stack.push(plain); }
   }
   let mut indexed = 0;
   let mut warnings = 0;
@@ -324,6 +327,8 @@ mod tests {
     let result = scan(&[text.clone(), text], &ScanControl::new(), |batch, _| found.extend(batch)).unwrap();
     assert_eq!(result.0, 3);
     assert_eq!(found.len(), 3);
+    assert!(found.iter().all(|entry| !entry.view.path.starts_with(r"\\?\")), "結果パスは通常ペインと同じ表記であるべき");
+    assert!(found.iter().any(|entry| entry.view.path == root.join("one.txt").to_string_lossy()));
     fs::remove_dir_all(root).unwrap();
   }
 

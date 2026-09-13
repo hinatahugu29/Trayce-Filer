@@ -758,7 +758,7 @@ fn validate_name(name: &str) -> Result<(), String> {
 
 /// Windows の `canonicalize` は `\\?\C:\...` を返す。
 /// この形式は他アプリに渡すと解釈されないことがあるので、表示にもドラッグにも使えるよう剥がす。
-fn strip_unc(p: &Path) -> String {
+pub(crate) fn strip_unc(p: &Path) -> String {
   let s = p.to_string_lossy().to_string();
   s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
 }
