@@ -139,19 +139,29 @@
     cursor: default;
   }
 
-  .choices button:hover,
-  .choices button:focus-visible {
-    background: #33517a;
-    border-color: #4d74a8;
+  /* 焦点（Enter で決まる選択肢）と、ポインターが乗っているだけの選択肢を見分けられるようにする。
+     同じ見た目だと、2つ強調されてどちらが既定か分からなくなる。 */
+  .choices button:hover {
+    background: #383838;
+    border-color: #5a5a5a;
+  }
+
+  .choices button:focus {
     outline: none;
+  }
+
+  .choices button:focus-visible,
+  .choices button:focus {
+    background: #33517a;
+    border-color: #6d9ad6;
+    box-shadow: 0 0 0 1px #6d9ad6;
   }
 
   .choices small {
     color: #9a9a9a;
   }
 
-  .choices button:hover small,
-  .choices button:focus-visible small {
+  .choices button:focus small {
     color: #c7d6ea;
   }
 
