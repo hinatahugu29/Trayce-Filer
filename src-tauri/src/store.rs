@@ -154,8 +154,23 @@ pub struct SavedSidebarState {
 pub struct SavedTabState {
   pub panes: Vec<SavedPaneState>,
   pub active_pane_index: usize,
+  /// 選んでいるトレイの中身。複数トレイより前の保存データとの互換のため残す。
   #[serde(default)]
   pub tray_paths: Vec<String>,
+  /// 名前付きの全トレイ。無ければ `tray_paths` を1つのトレイとして扱う。
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub trays: Vec<SavedTray>,
+  #[serde(default)]
+  pub active_tray_index: usize,
+}
+
+/// 「納品用」「確認待ち」のように目的別に分けた収集トレイ。
+#[derive(Clone, Serialize, Deserialize, Default, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedTray {
+  pub name: String,
+  #[serde(default)]
+  pub paths: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -625,6 +640,26 @@ mod tests {
     assert_eq!(session.tabs[0].panes[0].kind, PaneKind::Directory);
     assert!(session.tabs[0].panes[0].search.is_none());
     assert!(session.tabs[0].panes[0].sidebar.is_none());
+  }
+
+  #[test]
+  fn named_trays_round_trip_and_older_sessions_keep_a_single_tray() {
+    let session: SessionState = serde_json::from_str(
+      r#"{"tabs":[{"panes":[{"path":"C:\\w"}],"activePaneIndex":0,"trayPaths":["C:\\b"],"trays":[{"name":"納品用","paths":["C:\\a"]},{"name":"確認待ち","paths":["C:\\b"]}],"activeTrayIndex":1}],"activeTabIndex":0}"#,
+    )
+    .unwrap();
+    let tab = &session.tabs[0];
+    assert_eq!(tab.trays.len(), 2);
+    assert_eq!(tab.trays[0], SavedTray { name: "納品用".into(), paths: vec![r"C:\a".into()] });
+    assert_eq!(tab.active_tray_index, 1);
+    let encoded = serde_json::to_string(&session).unwrap();
+    assert!(encoded.contains(r#""activeTrayIndex":1"#) && encoded.contains("確認待ち"));
+
+    let older: SessionState =
+      serde_json::from_str(r#"{"tabs":[{"panes":[],"activePaneIndex":0,"trayPaths":["C:\\x"]}],"activeTabIndex":0}"#).unwrap();
+    assert!(older.tabs[0].trays.is_empty(), "古い形式は trays を持たない（フロントが trayPaths から1つ作る）");
+    assert_eq!(older.tabs[0].tray_paths, [r"C:\x"]);
+    assert_eq!(older.tabs[0].active_tray_index, 0);
   }
 
   #[test]

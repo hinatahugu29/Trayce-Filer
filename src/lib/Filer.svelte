@@ -31,7 +31,95 @@
    * ペイン分割は「1つの作業」の中の見え方の話で、タブは「別の作業」を
    * 切り替える話。混ぜると、分割中に別の場所へ移るたび今の分割が壊れる。
    */
-  type TabState = { id: number; panes: PaneState[]; activeId: number; trayItems: string[] }
+  /**
+   * タブが持つ収集トレイ。「納品用」「確認待ち」のように目的別に分けられる。
+   *
+   * 選んでいるトレイの中身は `TabState.trayItems` に置き、他は `trays` に預けておく。
+   * こうすると、一覧・検索・ワークベンチ・窓一覧は今までどおり `trayItems` だけを見ればよい。
+   */
+  type TrayState = { id: number; name: string; items: string[] }
+  type TabState = {
+    id: number
+    panes: PaneState[]
+    activeId: number
+    /** 選んでいるトレイの中身。 */
+    trayItems: string[]
+    trays: TrayState[]
+    activeTrayId: number
+  }
+  let nextTrayId = 1
+  const DEFAULT_TRAY_NAME = 'トレイ'
+
+  function newTray(name = DEFAULT_TRAY_NAME, items: string[] = []): TrayState {
+    return { id: nextTrayId++, name, items }
+  }
+
+  /** 選んでいるトレイへ、作業中の中身を書き戻す。切り替えや保存の前に呼ぶ。 */
+  function stashActiveTray(tab: TabState) {
+    const active = tab.trays.find((tray) => tray.id === tab.activeTrayId)
+    if (active) active.items = tab.trayItems
+  }
+
+  $: traySummaries = activeTab
+    ? activeTab.trays.map((tray): api.TraySummary => ({
+        id: tray.id,
+        name: tray.name,
+        count: tray.id === activeTab.activeTrayId ? activeTab.trayItems.length : tray.items.length,
+      }))
+    : []
+
+  function selectTray(id: number) {
+    const tab = activeTab
+    const next = tab?.trays.find((tray) => tray.id === id)
+    if (!tab || !next || id === tab.activeTrayId) return
+    stashActiveTray(tab)
+    tab.activeTrayId = id
+    tab.trayItems = next.items
+    tabs = tabs
+  }
+
+  function addTray() {
+    const tab = activeTab
+    if (!tab) return
+    const name = window.prompt('新しいトレイの名前', `${DEFAULT_TRAY_NAME} ${tab.trays.length + 1}`)?.trim()
+    if (!name) return
+    stashActiveTray(tab)
+    const tray = newTray(name)
+    tab.trays = [...tab.trays, tray]
+    tab.activeTrayId = tray.id
+    tab.trayItems = tray.items
+    tabs = tabs
+    note(`トレイを追加: ${name}`)
+  }
+
+  function renameTray(id: number) {
+    const tray = activeTab?.trays.find((candidate) => candidate.id === id)
+    if (!tray) return
+    const name = window.prompt('トレイの名前', tray.name)?.trim()
+    if (!name || name === tray.name) return
+    tray.name = name
+    tabs = tabs
+  }
+
+  /** トレイを消す。集めた項目の一覧を消すだけで、ファイルには触れない。最後の1つは残す。 */
+  function deleteTray(id: number) {
+    const tab = activeTab
+    if (!tab || tab.trays.length <= 1) return
+    const index = tab.trays.findIndex((tray) => tray.id === id)
+    const tray = tab.trays[index]
+    if (!tray) return
+    const count = tray.id === tab.activeTrayId ? tab.trayItems.length : tray.items.length
+    if (count > 0 && !window.confirm(`トレイ「${tray.name}」の ${count}件 の収集を解除して、トレイを削除しますか？（ファイルは消えません）`)) return
+    stashActiveTray(tab)
+    tab.trays = tab.trays.filter((candidate) => candidate.id !== id)
+    if (tab.activeTrayId === id) {
+      const next = tab.trays[Math.min(index, tab.trays.length - 1)]
+      tab.activeTrayId = next.id
+      tab.trayItems = next.items
+    }
+    tabs = tabs
+    note(`トレイを削除: ${tray.name}`)
+  }
 
   let tabs: TabState[] = []
   let activeTabId = 0
@@ -112,11 +200,14 @@
 
   function newTab(path: string) {
     const paneId = nextPaneId++
+    const tray = newTray()
     const tab: TabState = {
       id: nextTabId++,
       panes: [{ id: paneId, kind: 'directory', path }],
       activeId: paneId,
-      trayItems: [],
+      trayItems: tray.items,
+      trays: [tray],
+      activeTrayId: tray.id,
     }
     tabs = [...tabs, tab]
     activeTabId = tab.id
@@ -391,7 +482,14 @@
         search: p.search,
         sidebar: p.sidebar,
       }))
-      return { panes, activePaneIndex: activeIdx, trayPaths: t.trayItems }
+      stashActiveTray(t)
+      return {
+        panes,
+        activePaneIndex: activeIdx,
+        trayPaths: t.trayItems,
+        trays: t.trays.map((tray) => ({ name: tray.name, paths: tray.items })),
+        activeTrayIndex: Math.max(0, t.trays.findIndex((tray) => tray.id === t.activeTrayId)),
+      }
     })
     const activeTabIdx = Math.max(0, tabs.findIndex((t) => t.id === activeTabId))
     if (sessionTabs.length > 0) {
@@ -429,7 +527,12 @@
             panes.push({ id: nextPaneId++, kind: 'directory', path: await api.homeDir() })
           }
           const activeId = panes[t.activePaneIndex]?.id ?? panes[0].id
-          restoredTabs.push({ id: tabId, panes, activeId, trayItems: t.trayPaths ?? [] })
+          // 複数トレイより前の保存データは、trayPaths を1つのトレイとして復元する。
+          const trays = t.trays?.length
+            ? t.trays.map((tray) => newTray(tray.name || DEFAULT_TRAY_NAME, tray.paths ?? []))
+            : [newTray(DEFAULT_TRAY_NAME, t.trayPaths ?? [])]
+          const activeTray = trays[t.activeTrayIndex ?? 0] ?? trays[0]
+          restoredTabs.push({ id: tabId, panes, activeId, trayItems: activeTray.items, trays, activeTrayId: activeTray.id })
         }
         tabs = restoredTabs
         const activeTabObj = tabs[savedSession.activeTabIndex] ?? tabs[0]
@@ -591,6 +694,12 @@
               onTrayToggle={toggleTrayItem}
               onTrayClear={clearTray}
               onTrayRemoveMany={removeTrayItems}
+              trays={traySummaries}
+              activeTrayId={activeTab.activeTrayId}
+              onTraySelect={selectTray}
+              onTrayAdd={addTray}
+              onTrayRename={renameTray}
+              onTrayDelete={deleteTray}
               sidebarState={pane.sidebar ?? { primary: 'tree' }}
               onSidebarChange={(sidebar) => {
                 pane.sidebar = sidebar

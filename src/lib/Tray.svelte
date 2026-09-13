@@ -9,8 +9,18 @@
   export let onRemoveMany: (paths: string[]) => void = () => {}
   export let onClear: () => void = () => {}
   export let onTransfer: (paths: string[], moveFiles: boolean) => void = () => {}
+  /** 転送中でも押せる（ペイン側が順番待ちに入れる）。 */
   export let transferBusy = false
   export let destinationPath = ''
+  /** タブの全トレイ。2つ以上ある時や、名前を付けたい時に切り替え欄を使う。 */
+  export let trays: api.TraySummary[] = []
+  export let activeTrayId = 0
+  export let onSelect: (id: number) => void = () => {}
+  export let onAdd: () => void = () => {}
+  export let onRename: (id: number) => void = () => {}
+  export let onDelete: (id: number) => void = () => {}
+
+  $: activeTray = trays.find((tray) => tray.id === activeTrayId)
 
   let exist: boolean[] = []
   let refreshToken = 0
@@ -69,6 +79,22 @@
 </script>
 
 <div class="tray">
+  {#if trays.length}
+    <div class="switcher">
+      <select
+        aria-label="使うトレイ"
+        value={activeTrayId}
+        on:change={(event) => onSelect(Number(event.currentTarget.value))}
+      >
+        {#each trays as tray (tray.id)}
+          <option value={tray.id}>{tray.name}{tray.count ? `（${tray.count}）` : ''}</option>
+        {/each}
+      </select>
+      <button type="button" title="トレイを追加（目的別に分けて集める）" aria-label="トレイを追加" on:click={onAdd}>＋</button>
+      <button type="button" title="このトレイの名前を変える" aria-label="トレイの名前を変える" disabled={!activeTray} on:click={() => onRename(activeTrayId)}>✎</button>
+      <button type="button" title="このトレイを削除（ファイルは消えません）" aria-label="トレイを削除" disabled={trays.length <= 1} on:click={() => onDelete(activeTrayId)}>🗑</button>
+    </div>
+  {/if}
   <div class="summary">
     <span>{items.length ? `${items.length} 件を収集中` : 'Alt+Click で項目を集める'}</span>
     {#if items.length}
@@ -123,6 +149,11 @@
 
 <style>
   .tray { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .switcher { display: flex; align-items: center; gap: 2px; padding: 5px 6px; border-bottom: 1px solid #2c2c2c; }
+  .switcher select { flex: 1; min-width: 0; padding: 3px 4px; border: 1px solid #333; border-radius: 3px; background: #202020; color: #ddd; font: inherit; font-size: 10.5px; }
+  .switcher button { width: 22px; height: 22px; border-radius: 3px; color: #8f9aaa; font-size: 11px; }
+  .switcher button:hover:not(:disabled) { background: #2a2f35; color: #dfe7ee; }
+  .switcher button:disabled { opacity: .35; cursor: default; }
   .summary { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-bottom: 1px solid #2c2c2c; color: #8f9aaa; font-size: 10.5px; }
   .summary span { flex: 1; }
   button { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }

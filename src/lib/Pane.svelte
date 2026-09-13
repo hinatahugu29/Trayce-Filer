@@ -53,6 +53,13 @@
   export let onTrayToggle: (path: string) => void = () => {}
   export let onTrayClear: () => void = () => {}
   export let onTrayRemoveMany: (paths: string[]) => void = () => {}
+  /** タブの全トレイと、選んでいるトレイ。切り替え・追加・名前変更・削除はタブ側が持つ。 */
+  export let trays: api.TraySummary[] = []
+  export let activeTrayId = 0
+  export let onTraySelect: (id: number) => void = () => {}
+  export let onTrayAdd: () => void = () => {}
+  export let onTrayRename: (id: number) => void = () => {}
+  export let onTrayDelete: (id: number) => void = () => {}
   export let sidebarState: api.SavedSidebarState = { primary: 'tree' }
   export let onSidebarChange: (state: api.SavedSidebarState) => void = () => {}
 
@@ -974,7 +981,12 @@
           {onTrayRemoveMany}
           {onTrayClear}
           onTrayTransfer={transferTray}
-          trayTransferBusy={transferId !== null}
+          {trays}
+              {activeTrayId}
+              {onTraySelect}
+              {onTrayAdd}
+              {onTrayRename}
+              {onTrayDelete}
           />
         </div>
         {#if sidebarSecondary}
@@ -993,7 +1005,12 @@
               {onTrayRemoveMany}
               {onTrayClear}
               onTrayTransfer={transferTray}
-              trayTransferBusy={transferId !== null}
+              {trays}
+              {activeTrayId}
+              {onTraySelect}
+              {onTrayAdd}
+              {onTrayRename}
+              {onTrayDelete}
             />
           </div>
         {/if}

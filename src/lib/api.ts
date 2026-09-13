@@ -347,7 +347,19 @@ export type SavedPaneState = {
   selectedEntry?: string
   scrollTop?: number
 }
-export type SavedTabState = { panes: SavedPaneState[]; activePaneIndex: number; trayPaths?: string[] }
+/** 目的別に分けた収集トレイ。 */
+export type SavedTray = { name: string; paths: string[] }
+export type SavedTabState = {
+  panes: SavedPaneState[]
+  activePaneIndex: number
+  /** 選んでいるトレイの中身。複数トレイより前の保存データとの互換のため残す。 */
+  trayPaths?: string[]
+  /** 名前付きの全トレイ。無ければ trayPaths を1つのトレイとして扱う。 */
+  trays?: SavedTray[]
+  activeTrayIndex?: number
+}
+/** トレイ切り替え欄に出す概要。 */
+export type TraySummary = { id: number; name: string; count: number }
 export type SessionState = { tabs: SavedTabState[]; activeTabIndex: number }
 
 /** どの窓も保存する。次回起動時は最後に閉じた窓のセッションが main に復元される。 */
