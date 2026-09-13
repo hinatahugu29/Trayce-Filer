@@ -93,6 +93,7 @@ results available as normal copy/move/preview/tray sources.
 - `SPEC.md` now provides a product-facing description of the Tauri Filer, separating implemented behavior, design principles, candidate directions, non-goals, interview questions, and reusable prompts for consulting other AI systems.
 - The window registry now receives the active tab label, total tab count, and every visible pane's ID, kind, path, query, and active state. The compact overlay groups those panes beneath their owning window, includes pane context in filtering, and can focus a specific pane through a targeted cross-WebView event. Other tabs remain represented by count only to avoid flattening the hierarchy into an unreadable list.
 - Workbench window cards now contain a pane map for the active tab. Selecting a pane changes both the real Filer target and the card body; directory panes load their own mini listing, while search panes show their query/context without pretending to be directories. Directory pane tiles are explicit drop targets, including transfers between two panes in the same window, and search panes reject destination drops.
+- Workbench cards now receive every tab's ID, concrete display name, and active state. A horizontally scrollable tab strip replaces the vague “other N tabs” summary as the primary overview; selecting a name switches the real Filer tab, after which the card's pane map and mini listing refresh to that tab.
 
 ## Key integration points
 
@@ -180,6 +181,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Added `SPEC.md` as the product and interview document. It deliberately avoids treating roadmap ideas as implemented requirements and points engineering follow-ups back to this handover.
 - 2026-09-13: Brought active pane topology into the compact window list in three commits: registry schema and tests, live Filer publication, then grouped child rows with targeted pane activation. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 81 Rust tests (1 ignored benchmark), production build, and diff checks.
 - 2026-09-13: Extended the same topology into Workbench cards. Added a selectable pane map, selected-pane content switching, search-pane context presentation, pane-specific drop targets, and same-window cross-pane transfers. Frontend diagnostics, 48 tests, production build, and diff checks passed; the unchanged Rust layer retains its 81 passing tests plus 1 ignored benchmark.
+- 2026-09-13: Replaced Workbench's opaque “other N tabs” description with all concrete tab names in a compact scrollable strip. Tab IDs and active state are shared through the registry, and choosing a tab from the card activates it in the owning Filer. Frontend diagnostics, 48 tests, production build, five focused window-registry tests, and diff checks passed.
 
 ## Commit log
 
@@ -234,3 +236,5 @@ Each slice gets its own implementation commit followed by verification and a han
 - `43ad7b7` — `feat: map panes inside workbench cards`
 - `ecc0709` — `feat: target workbench transfers by pane`
 - `393525e` — `docs: clarify pane-level workbench actions`
+- `05861b7` — `feat: share window tab summaries`
+- `e2f7fef` — `feat: switch named tabs from workbench cards`
