@@ -46,6 +46,8 @@ results available as normal copy/move/preview/tray sources.
 - [x] Search history follow-up — expose search-location history as a first-class navigation surface, separate from ordinary folder history and per-pane query history
 - [ ] Search follow-up — profile real-device performance before deciding whether parallel directory walking is beneficial
 - [x] Performance/correctness review — transfer cancellation reporting, search path identity, same-volume moves, incremental search filtering, timestamp preservation, debounced persistence, watcher starvation, listing sort allocations
+- [x] Functional review — preview head reads, no-overwrite on name exhaustion, single instance, width/case-insensitive filtering, collision choice dialog, last-closed-window session restore, stale search results, search/tray context menus
+- [ ] Functional follow-up — restore every open window (not only the last closed one) if multi-window restore becomes necessary
 - [ ] Review follow-up — make trash undo lookup cheaper (`trash::os_limited::list()` enumerates the whole recycle bin on every delete)
 - [ ] Review follow-up — reduce per-entry search cache memory (four owned strings per entry) if multi-million-entry roots become common
 - [ ] Review follow-up — split `fs_ops.rs` (listing / transfer / clipboard / preview) and continue the gradual `Pane.svelte` extraction
@@ -107,6 +109,16 @@ results available as normal copy/move/preview/tray sources.
   - `state.json` writes are coalesced by a writer thread (300 ms quiet period) and flushed on `RunEvent::Exit`.
   - Directory watch reloads keep the 250 ms debounce but fire after at most 1 s of continuous changes.
   - Listing sorts lowercase each name once instead of per comparison.
+- A functional review followed, with direction from the user on three product decisions (collisions ask, last closed window restores, searches ignore case/width):
+  - Text preview reads at most 64 KB via `Read::take` and trims an incomplete trailing UTF-8 sequence.
+  - `unique_target` returns an error when no free name remains instead of returning the existing path, which the streaming copy would have overwritten.
+  - A std-only single-instance guard (`instance.rs`) takes an exclusive temp lock file; later launches send a focus token to the first process over localhost and exit. `tauri-plugin-single-instance` was not used because crates could not be downloaded in this environment. `rust-version` is 1.89 for `File::try_lock`.
+  - `search::normalize` and `api.foldForSearch` share one folding rule set: ASCII case, full-width ASCII, ideographic space, and half-width katakana with composed marks. It applies to search queries/cache, the in-folder filter, history filter, and window list filter; full-width `！`/`－`/`｜` act as operators.
+  - Before any pane, paste, tray, or Workbench transfer, `transfer_conflicts` is checked. `ConflictDialog.svelte` offers keep both (default), overwrite (existing item to Recycle Bin; a target containing the source is refused), skip (not reported as completed), or cancel (cut clipboard kept). `start_transfer` takes an optional `conflict` policy.
+  - Every Filer window saves its session with its label; the store keeps one per window and promotes a window's session to `last_session` on `Destroyed`, before unregistering can exit the app. Main restores the last closed window next launch.
+  - The search worker verifies existence only for rows it is about to show, drops and backfills missing ones, and remembers them. `recheck_search` forces a re-emit; the pane calls it on pointer enter and window focus (throttled to 1 s).
+  - Search results gained a context menu (open, open containing folder beside, reveal, copy/cut/path/name, tray toggle, narrow search to folder, search folder beside). Directory panes gained "search inside this folder" and a tray toggle.
+  - Checked and left as is: pane paste already uses the background transfer pipeline; `paste_clipboard`/`accept_dropped` remain unused synchronous commands.
 - The Trayce visual identity is now applied to the Tauri icon set. `assets/branding/trayce-icon-source.png` is the retained 1024px source, and the generated PNG/ICO/ICNS plus platform icon variants live under `src-tauri/icons`. `build.rs` explicitly tracks the executable and window-icon sources so artwork-only changes rebuild the Windows resource instead of leaving Tauri's previously embedded default icon in development and release executables.
 
 ## Key integration points
@@ -198,6 +210,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Replaced Workbench's opaque “other N tabs” description with all concrete tab names in a compact scrollable strip. Tab IDs and active state are shared through the registry, and choosing a tab from the card activates it in the owning Filer. Frontend diagnostics, 48 tests, production build, five focused window-registry tests, and diff checks passed.
 
 - 2026-09-13: Completed a speed and implementation review in eight focused commits (see Current status). Verification passed with 0 Svelte diagnostics, 48 frontend tests, 89 Rust tests (1 ignored benchmark), production build, and diff checks. Not yet exercised in the running app: the exit-time state flush and the incremental search worker on a large real root.
+- 2026-09-13: Completed the functional review in eight commits (see Current status) and updated `SPEC.md`. Verification passed with 0 Svelte diagnostics, 52 frontend tests, 102 Rust tests (1 ignored benchmark), production build, and diff checks. Not yet exercised in the running app: the conflict dialog flow end to end, second-launch focus hand-off, and session restore after closing a detached window last.
 
 ## Commit log
 
@@ -265,3 +278,12 @@ Each slice gets its own implementation commit followed by verification and a han
 - `9a37d9e` — `perf: debounce state.json writes and flush on exit`
 - `669d92f` — `fix: refresh directory listings during sustained file changes`
 - `f12411f` — `perf: lowercase names once when sorting listings`
+- `35eda8b` — `docs: record performance and correctness review`
+- `1bc82ee` — `fix: read only the head of files for text preview`
+- `9d3366b` — `feat: ignore case and character width when searching and filtering`
+- `b50e7d5` — `fix: prevent a second Filer process from starting`
+- `69b822c` — `fix: fail instead of overwriting when no free name remains`
+- `55ca77e` — `feat: restore the last closed window's session on startup`
+- `316f10e` — `feat: ask how to handle name collisions before transferring`
+- `c8cc2ab` — `fix: drop search results that no longer exist`
+- `d3dd024` — `feat: add search and tray actions to context menus`
