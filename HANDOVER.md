@@ -42,6 +42,7 @@ results available as normal copy/move/preview/tray sources.
 - [x] Phase 12 — share selection, preview, tray, drag, copy, and move behavior with search results
 - [x] Phase 13 — persist and restore search scope, query, options, and result presentation
 - [x] Phase 14 — bring over advanced query/sort/history behavior from `File_Search_APP` selectively
+- [ ] Search history follow-up — expose search-location history as a first-class navigation surface, separate from ordinary folder history and per-pane query history
 - [ ] Search follow-up — profile real-device performance before deciding whether parallel directory walking is beneficial
 
 ## Current status
@@ -84,6 +85,7 @@ results available as normal copy/move/preview/tray sources.
 - Pane creation now exposes both meanings explicitly: `N` duplicates the current directory as a normal pane, `Shift+N` preserves the source pane and adds a search pane scoped to its current directory, and the existing `⌕` action converts the current pane itself to search.
 - Sidebar tree folder names now toggle as well as navigate: the first click expands the folder and a second click collapses it. The separate disclosure arrow remains available for opening or closing without navigation.
 - The directory-pane sidebar can now be split into two stacked information views. Each section independently shows tree, favorites, history, or tray; the divider adjusts their height, either section can collapse back to the original single view, and the composition is restored per pane.
+- Search navigation must remain parallel to directory navigation rather than being folded into it. `File_Search_APP` prominently exposes recently searched roots (up to 15) so a flow such as “search here, then search the place used a moment ago” is one click away. Filer currently has only a compact per-pane query-history selector; it still needs an equally accessible, persistent search-location history surface.
 
 ## Key integration points
 
@@ -114,6 +116,7 @@ results available as normal copy/move/preview/tray sources.
 - Selecting, multi-selecting, previewing, adding to tray, opening, revealing, and dragging results should feel identical to directory rows.
 - Dropping search results on a directory pane means copy/move as today. Dropping them on the tray means collect only. A search pane is not initially a transfer destination.
 - Hover-target left-hand shortcuts continue to target the pane under the pointer. Parent navigation is directory-only; search gets a dedicated focus/start-stop action only after real-device use establishes the best key.
+- Keep three concepts distinct in the UI and state: ordinary folder-navigation history, searched-location history, and search-word history. Selecting a searched location should immediately retarget/reindex the search pane while retaining the current search word, matching the reference app's rapid “search here, then revisit another root” flow.
 
 ### Architecture
 
