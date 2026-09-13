@@ -709,24 +709,46 @@ pub fn preview_entry(path: String) -> Preview {
   }
 
   if PREVIEW_TEXT_EXT.contains(&ext.as_str()) || ext.is_empty() {
-    return match std::fs::read(p) {
+    return match read_head(p, TEXT_PREVIEW_CAP) {
       Ok(bytes) => {
         // NUL バイトを含んでいたらテキストとして解釈させない。
-        // バイナリを無理に文字列化すると表示が壊れるだけでなく、
-        // 巨大バイナリを丸ごと読む羽目にもなる。
+        // バイナリを無理に文字列化すると表示が壊れる。
         let probe = &bytes[..bytes.len().min(8192)];
         if probe.contains(&0) {
           return Preview::Unsupported { reason: "バイナリファイルです".into() };
         }
-        let truncated = bytes.len() > TEXT_PREVIEW_CAP;
-        let slice = &bytes[..bytes.len().min(TEXT_PREVIEW_CAP)];
-        Preview::Text { text: String::from_utf8_lossy(slice).to_string(), truncated }
+        let truncated = meta.len() > bytes.len() as u64;
+        Preview::Text { text: utf8_head_lossy(&bytes, truncated), truncated }
       }
       Err(e) => Preview::Unsupported { reason: format!("読めません: {e}") },
     };
   }
 
   Preview::Unsupported { reason: "対応していない種類です".into() }
+}
+
+/// ファイルの先頭 `cap` バイトだけを読む。
+///
+/// 以前は `fs::read` で全体を読んでから切っていたため、拡張子が `.log` や `.csv`、
+/// 拡張子なしの数GBファイルで Space を押すと、全体を読み終わるまで固まっていた。
+fn read_head(path: &Path, cap: usize) -> std::io::Result<Vec<u8>> {
+  use std::io::Read;
+  let mut bytes = Vec::with_capacity(cap.min(64 * 1024));
+  std::fs::File::open(path)?.take(cap as u64).read_to_end(&mut bytes)?;
+  Ok(bytes)
+}
+
+/// 途中で切った UTF-8 を文字列にする。
+/// 上限で多バイト文字の途中を切ると末尾が `�` になるので、切った時だけ最後の不完全な文字を捨てる。
+fn utf8_head_lossy(bytes: &[u8], truncated: bool) -> String {
+  if truncated {
+    if let Err(error) = std::str::from_utf8(bytes) {
+      if error.error_len().is_none() {
+        return String::from_utf8_lossy(&bytes[..error.valid_up_to()]).to_string();
+      }
+    }
+  }
+  String::from_utf8_lossy(bytes).to_string()
 }
 
 /// アドレスバーに打たれた途中のパスから候補を出す。
@@ -1339,6 +1361,25 @@ mod tests {
     } else {
       panic!("text であるはず");
     }
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// 上限を超える部分は読まない。多バイト文字の途中で切っても末尾を化けさせない。
+  #[test]
+  fn preview_reads_only_the_head_and_keeps_utf8_boundaries() {
+    let root = scratch("preview_head");
+    // 3バイト文字「あ」を並べ、上限がちょうど文字の途中に来るようにする。
+    let text = "あ".repeat(TEXT_PREVIEW_CAP / 3 + 10);
+    assert_ne!(TEXT_PREVIEW_CAP % 3, 0, "上限が文字境界だとこのテストは意味を失う");
+    std::fs::write(root.join("big.log"), &text).unwrap();
+
+    assert_eq!(read_head(&root.join("big.log"), 10).unwrap().len(), 10);
+    let Preview::Text { text: shown, truncated } = preview_entry(s(&root.join("big.log"))) else {
+      panic!("text であるはず");
+    };
+    assert!(truncated);
+    assert!(!shown.ends_with('\u{FFFD}'), "切れ目の不完全な文字は捨てる");
+    assert!(shown.chars().all(|c| c == 'あ'));
     let _ = std::fs::remove_dir_all(&root);
   }
 
