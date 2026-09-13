@@ -4,12 +4,13 @@
   import type { UnlistenFn } from '@tauri-apps/api/event'
   import * as api from './api'
   import { splitPath, pathHue, elideLeft, formatSize, joinPath } from './api'
-  import type { WindowInfo, Entry } from './api'
+  import type { WindowInfo, WindowPaneInfo, Entry } from './api'
   import TransferBar from './TransferBar.svelte'
 
   export let windows: WindowInfo[] = []
   export let pinned: boolean = false
   export let onSelectWindow: (w: WindowInfo) => void
+  export let onSelectPane: (w: WindowInfo, pane: WindowPaneInfo) => void
   export let onCloseWindow: (label: string) => void
   export let onNote: (msg: string) => void = () => {}
 
@@ -18,6 +19,19 @@
 
   // 各ウィンドウのフォルダ内ファイル一覧キャッシュ
   let dirCache: Record<string, { entries: Entry[]; loading: boolean; error?: string }> = {}
+  let selectedPaneIds: Record<string, number> = {}
+
+  function selectedPane(win: WindowInfo): WindowPaneInfo | undefined {
+    const selectedId = selectedPaneIds[win.label]
+    return win.panes.find((pane) => pane.id === selectedId)
+      ?? win.panes.find((pane) => pane.is_active)
+      ?? win.panes[0]
+  }
+
+  function choosePane(win: WindowInfo, pane: WindowPaneInfo) {
+    selectedPaneIds = { ...selectedPaneIds, [win.label]: pane.id }
+    onSelectPane(win, pane)
+  }
 
   // ドラッグ中のファイル情報
   let draggingItem: {
@@ -72,9 +86,11 @@
 
   // 表示中ウィンドウのディレクトリ内容を非同期読み込み
   $: {
+    selectedPaneIds
     for (const w of visibleWindows) {
-      if (!dirCache[w.path] && w.path) {
-        loadDir(w.path)
+      const pane = selectedPane(w)
+      if (pane?.kind === 'directory' && !dirCache[pane.path] && pane.path) {
+        loadDir(pane.path)
       }
     }
   }
@@ -121,9 +137,10 @@
   function handleDragStart(
     entry: Entry,
     win: WindowInfo,
+    parentPath: string,
     ev: DragEvent
   ) {
-    const fullPath = joinPath(win.path, entry.name)
+    const fullPath = joinPath(parentPath, entry.name)
 
     draggingItem = {
       paths: [fullPath],
@@ -291,14 +308,16 @@
   <!-- メインカード領域（可視ウィンドウ） -->
   <div class="cards-viewport {layoutMode}">
     {#each visibleWindows as w (w.label)}
-      {@const parts = splitPath(w.path)}
-      {@const cache = dirCache[w.path]}
+      {@const selected = selectedPane(w)}
+      {@const displayPath = selected?.path ?? w.path}
+      {@const parts = splitPath(displayPath)}
+      {@const cache = selected?.kind === 'directory' ? dirCache[displayPath] : undefined}
       {@const isDropTarget = dropTargetLabel === w.label}
       <div
         class="card"
         class:drop-target={isDropTarget}
         class:transferring={activeTransfer?.targetLabel === w.label}
-        style="--hue: {pathHue(w.path)}"
+        style="--hue: {pathHue(displayPath)}"
         on:click={() => onSelectWindow(w)}
         on:keydown={(e) => e.key === 'Enter' && onSelectWindow(w)}
         on:dragover={(e) => handleCardDragOver(w, e)}
@@ -313,8 +332,8 @@
           <div class="header-left">
             <span class="band" />
             <div class="titles">
-              <span class="folder-name" title={w.path}>{parts.tail || w.path}</span>
-              <span class="folder-path" title={w.path}>{elideLeft(parts.lead, 36)}</span>
+              <span class="folder-name" title={displayPath}>{parts.tail || displayPath}</span>
+              <span class="folder-path" title={displayPath}>{w.active_tab_label}{w.tab_count > 1 ? ` · 他${w.tab_count - 1}タブ` : ''}</span>
             </div>
           </div>
           <div class="header-actions">
@@ -345,6 +364,24 @@
           </div>
         </div>
 
+        <div class="pane-map" aria-label="現在のタブのペイン">
+          {#each w.panes as pane, paneIndex (`${w.label}-${pane.id}`)}
+            {@const paneParts = splitPath(pane.path)}
+            <button
+              type="button"
+              class:selected={pane.id === selected?.id}
+              class:active-pane={pane.is_active}
+              class:search-pane={pane.kind === 'search'}
+              title={pane.path}
+              on:click|stopPropagation={() => choosePane(w, pane)}
+            >
+              <span>{pane.kind === 'search' ? '⌕' : '▣'} {paneIndex + 1}</span>
+              <strong>{pane.kind === 'search' && pane.query ? pane.query : paneParts.tail || pane.path}</strong>
+              <small>{pane.kind === 'search' ? '検索ペイン' : elideLeft(pane.path, 28)}</small>
+            </button>
+          {/each}
+        </div>
+
         <!-- ドロップオーバー時のオーバーレイバッジ -->
         {#if isDropTarget}
           <div class="drop-banner">
@@ -360,7 +397,14 @@
 
         <!-- カードボディ：ファイル一覧（ミニファイラー） -->
         <div class="card-body">
-          {#if !cache || cache.loading}
+          {#if selected?.kind === 'search'}
+            <div class="search-state">
+              <span>⌕</span>
+              <strong>{selected.query || '検索語なし'}</strong>
+              <small title={selected.path}>{selected.path}</small>
+              <p>検索ペインは転送元として使い、転送先にはしません。</p>
+            </div>
+          {:else if !cache || cache.loading}
             <div class="loading-state">読み込み中…</div>
           {:else if cache.error}
             <div class="error-state">フォルダを読めません: {cache.error}</div>
@@ -373,7 +417,7 @@
                   class="file-item"
                   class:is-dir={entry.is_dir}
                   draggable="true"
-                  on:dragstart={(e) => handleDragStart(entry, w, e)}
+                  on:dragstart={(e) => handleDragStart(entry, w, displayPath, e)}
                   on:dragend={handleDragEnd}
                   title="{entry.name} ({entry.is_dir ? 'フォルダ' : formatSize(entry.size)})"
                   role="presentation"
@@ -392,7 +436,7 @@
         <!-- カードフッター -->
         <div class="card-footer">
           <span class="entry-count">
-            {cache?.entries ? `${cache.entries.length} 項目` : '…'}
+            {selected?.kind === 'search' ? '検索ペイン' : cache?.entries ? `${cache.entries.length} 項目` : '…'}
           </span>
           <span class="dnd-hint">
             {pinned ? '📌固定中 · ' : ''}他カードへD&Dで移動 / Ctrl+D&Dでコピー
@@ -620,6 +664,16 @@
     gap: 4px;
     flex: none;
   }
+  .pane-map { display: flex; gap: 5px; padding: 6px 8px; border-bottom: 1px solid #303035; background: #1b1b1e; }
+  .pane-map button { display: grid; min-width: 0; flex: 1; grid-template-columns: auto 1fr; gap: 1px 5px; border: 1px solid #363940; border-radius: 5px; background: #242529; padding: 5px 7px; color: #89939c; text-align: left; cursor: pointer; }
+  .pane-map button:hover { border-color: #525965; background: #2b2d32; }
+  .pane-map button.selected { border-color: #4c9aff; background: #26384d; color: #8fc1f5; }
+  .pane-map button.active-pane { box-shadow: inset 2px 0 0 #63cfad; }
+  .pane-map button.search-pane { border-style: dashed; }
+  .pane-map span { grid-row: 1 / 3; align-self: center; font-size: 10px; }
+  .pane-map strong, .pane-map small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pane-map strong { color: #d5d9dd; font-size: 10px; font-weight: 600; }
+  .pane-map small { color: #707983; font-size: 8.5px; }
   .action-btn {
     width: 26px;
     height: 26px;
@@ -667,6 +721,11 @@
   .error-state {
     color: #f87171;
   }
+  .search-state { display: flex; height: 100%; align-items: center; justify-content: center; flex-direction: column; color: #74818b; text-align: center; }
+  .search-state > span { color: #63cfad; font-size: 30px; }
+  .search-state strong { max-width: 90%; margin-top: 5px; overflow: hidden; color: #d8dcdf; text-overflow: ellipsis; white-space: nowrap; }
+  .search-state small { max-width: 90%; margin-top: 4px; overflow: hidden; color: #74818b; text-overflow: ellipsis; white-space: nowrap; }
+  .search-state p { margin: 12px 0 0; color: #59636b; font-size: 10px; }
 
   .file-grid {
     display: flex;

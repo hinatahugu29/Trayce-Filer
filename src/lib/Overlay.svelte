@@ -228,6 +228,7 @@
         {windows}
         {pinned}
         onSelectWindow={pick}
+        onSelectPane={pickPane}
         onCloseWindow={handleCloseWindow}
         onNote={showNote}
       />
