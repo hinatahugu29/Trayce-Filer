@@ -483,7 +483,10 @@
     {/if}
   </div>
 
-  <div class="syntax"><span>空白: AND</span><span>|: OR</span><span>! または -: 除外</span></div>
+  <div class="syntax" title="条件は ! や - を前に付けると反転します。大文字小文字・全角半角は区別しません。">
+    <span>空白: AND</span><span>|: OR</span><span>! または -: 除外</span>
+    <span>ext:png,jpg</span><span>size:&gt;10mb</span><span>modified:7d</span><span>type:file / dir</span>
+  </div>
 
   <div class="workspace">
     {#if showHistory}

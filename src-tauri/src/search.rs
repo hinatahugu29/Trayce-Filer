@@ -389,9 +389,61 @@ fn compose_kana_mark(base: char, handakuten: bool) -> Option<char> {
 /// 含む語と除く語を解析時に分けておき、全件に対する判定でメモリ確保をしない。
 #[derive(Debug, Default, PartialEq, Eq)]
 struct QueryClause { include: Vec<String>, exclude: Vec<String> }
-type Query = Vec<QueryClause>;
+
+/// 名前の一致とは別に、属性で絞る条件。`!`/`-` を前に付けると反転する。
+///
+/// - `ext:png,jpg`       拡張子（`.` は付けても付けなくてもよい）
+/// - `size:>10mb`        大きさ（`>` 以上 / `<` 以下。単位は b, kb, mb, gb。省略時は以上）
+/// - `modified:7d`       更新が指定期間以内（h 時間, d 日, w 週。`today` は24時間以内）
+/// - `type:file`         ファイルだけ（`dir` / `folder` でフォルダだけ）
+///
+/// 値が読めない時は条件にせず、普通の検索語として扱う（黙って全件を落とさないため）。
+#[derive(Debug, PartialEq, Eq)]
+enum FilterKind {
+  Ext(Vec<String>),
+  SizeAtLeast(u64),
+  SizeAtMost(u64),
+  ModifiedSince(u128),
+  IsDir(bool),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct QueryFilter { kind: FilterKind, negate: bool }
+
+impl QueryFilter {
+  fn matches(&self, entry: &CachedEntry) -> bool {
+    let view = &entry.view;
+    let hit = match &self.kind {
+      FilterKind::Ext(exts) => !view.is_dir && exts.iter().any(|ext| *ext == normalize(&view.ext)),
+      FilterKind::SizeAtLeast(bytes) => !view.is_dir && view.size >= *bytes,
+      FilterKind::SizeAtMost(bytes) => !view.is_dir && view.size <= *bytes,
+      FilterKind::ModifiedSince(at) => view.modified >= *at,
+      FilterKind::IsDir(is_dir) => view.is_dir == *is_dir,
+    };
+    hit != self.negate
+  }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Query { clauses: Vec<QueryClause>, filters: Vec<QueryFilter> }
+
 fn parse_query(query: &str) -> Query {
-  normalize(query).split_whitespace().filter_map(|part| {
+  let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+  parse_query_at(query, now)
+}
+
+/// `now` は更新日時の条件の基準。テストで固定するために分けている。
+fn parse_query_at(query: &str, now: u128) -> Query {
+  let mut parsed = Query::default();
+  for part in normalize(query).split_whitespace() {
+    let (negate, body) = match part.strip_prefix('!').or_else(|| part.strip_prefix('-')) {
+      Some(rest) => (true, rest),
+      None => (false, part),
+    };
+    if let Some(kind) = parse_filter(body, now) {
+      parsed.filters.push(QueryFilter { kind, negate });
+      continue;
+    }
     let mut clause = QueryClause::default();
     for value in part.split('|').map(str::trim) {
       if let Some(term) = value.strip_prefix('!').or_else(|| value.strip_prefix('-')) {
@@ -400,14 +452,74 @@ fn parse_query(query: &str) -> Query {
         clause.include.push(value.replace('/', "\\"));
       }
     }
-    (!clause.include.is_empty() || !clause.exclude.is_empty()).then_some(clause)
-  }).collect()
+    if !clause.include.is_empty() || !clause.exclude.is_empty() {
+      parsed.clauses.push(clause);
+    }
+  }
+  parsed
 }
+
+fn parse_filter(body: &str, now: u128) -> Option<FilterKind> {
+  let (key, value) = body.split_once(':')?;
+  if value.is_empty() {
+    return None;
+  }
+  match key {
+    "ext" => {
+      let exts: Vec<String> = value.split(',').map(|ext| ext.trim().trim_start_matches('.').to_string()).filter(|ext| !ext.is_empty()).collect();
+      (!exts.is_empty()).then_some(FilterKind::Ext(exts))
+    }
+    "size" => {
+      let (at_most, amount) = match value.as_bytes()[0] {
+        b'<' => (true, &value[1..]),
+        b'>' => (false, &value[1..]),
+        _ => (false, value),
+      };
+      let bytes = parse_size(amount.trim_start_matches('='))?;
+      Some(if at_most { FilterKind::SizeAtMost(bytes) } else { FilterKind::SizeAtLeast(bytes) })
+    }
+    "modified" | "date" => {
+      let span_ms = if value == "today" { 24 * 3_600_000 } else { parse_span_ms(value)? };
+      Some(FilterKind::ModifiedSince(now.saturating_sub(span_ms)))
+    }
+    "type" | "kind" => match value {
+      "file" | "ファイル" => Some(FilterKind::IsDir(false)),
+      "dir" | "folder" | "フォルダ" | "フォルダー" => Some(FilterKind::IsDir(true)),
+      _ => None,
+    },
+    _ => None,
+  }
+}
+
+/// `10mb` `1.5gb` `500` のような大きさ。単位は 1024 倍ずつ。
+fn parse_size(text: &str) -> Option<u64> {
+  let split = text.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(text.len());
+  let number: f64 = text[..split].parse().ok()?;
+  let unit: u64 = match &text[split..] {
+    "" | "b" => 1,
+    "k" | "kb" => 1 << 10,
+    "m" | "mb" => 1 << 20,
+    "g" | "gb" => 1 << 30,
+    "t" | "tb" => 1 << 40,
+    _ => return None,
+  };
+  (number >= 0.0).then(|| (number * unit as f64) as u64)
+}
+
+/// `24h` `7d` `2w` のような期間をミリ秒へ。
+fn parse_span_ms(text: &str) -> Option<u128> {
+  let (number, unit) = text.split_at(text.len().checked_sub(1)?);
+  let count: u128 = number.parse().ok()?;
+  let hour = 3_600_000;
+  Some(count * match unit { "h" => hour, "d" => 24 * hour, "w" => 7 * 24 * hour, _ => return None })
+}
+
 fn matches_query(entry: &CachedEntry, query: &Query, match_path: bool) -> bool {
   let contains = |term: &String| entry.name_lower.contains(term.as_str()) || (match_path && entry.path_lower.contains(term.as_str()));
-  query.iter().all(|clause| {
-    !clause.exclude.iter().any(contains) && (clause.include.is_empty() || clause.include.iter().any(contains))
-  })
+  query.filters.iter().all(|filter| filter.matches(entry))
+    && query.clauses.iter().all(|clause| {
+      !clause.exclude.iter().any(contains) && (clause.include.is_empty() || clause.include.iter().any(contains))
+    })
 }
 
 #[tauri::command]
@@ -502,6 +614,51 @@ mod tests {
     assert!(!matches_query(&entry, &parse_query("カタログ　！draft"), false), "全角の！と全角空白でも除外になる");
     assert!(!matches_query(&entry, &parse_query("カタログ －ｄｒａｆｔ"), false), "全角の－でも除外になる");
     assert!(matches_query(&entry, &parse_query("xlsx｜ＰＤＦ"), false), "全角の｜でも OR になる");
+  }
+
+  fn attr_entry(name: &str, is_dir: bool, size: u64, modified: u128) -> CachedEntry {
+    let mut cached = CachedEntry::new(PathBuf::from(format!(r"C:\root\{name}")), is_dir, None);
+    cached.view.size = size;
+    cached.view.modified = modified;
+    cached
+  }
+
+  const DAY: u128 = 24 * 3_600_000;
+  const NOW: u128 = 100 * DAY;
+
+  fn hits(query: &str, entry: &CachedEntry) -> bool {
+    matches_query(entry, &parse_query_at(query, NOW), false)
+  }
+
+  #[test]
+  fn attribute_filters_narrow_by_extension_size_date_and_kind() {
+    let photo = attr_entry("Photo.PNG", false, 12 << 20, NOW - 2 * DAY);
+    let note = attr_entry("note.txt", false, 300, NOW - 40 * DAY);
+    let folder = attr_entry("photos", true, 0, NOW - DAY);
+
+    assert!(hits("ext:png,jpg", &photo) && !hits("ext:png,jpg", &note), "拡張子（大文字小文字は問わない）");
+    assert!(hits("ext:.txt", &note), "先頭の . は付けても良い");
+    assert!(!hits("ext:png", &folder), "フォルダは拡張子の条件に一致しない");
+    assert!(hits("size:>10mb", &photo) && !hits("size:>10mb", &note));
+    assert!(hits("size:<1kb", &note) && !hits("size:<1kb", &photo));
+    assert!(hits("modified:7d", &photo) && !hits("modified:7d", &note));
+    assert!(hits("modified:today", &folder) && !hits("modified:today", &photo));
+    assert!(hits("type:dir", &folder) && !hits("type:file", &folder));
+    assert!(hits("photo type:file", &photo) && !hits("photo type:file", &folder), "名前の条件と組み合わせる");
+    assert!(!hits("!ext:png", &photo) && hits("-ext:png", &note), "反転");
+  }
+
+  #[test]
+  fn full_width_filters_work_and_unreadable_values_fall_back_to_text() {
+    let photo = attr_entry("photo.png", false, 12 << 20, NOW);
+    assert!(hits("ＥＸＴ：ＰＮＧ", &photo), "全角で打っても条件として働く");
+    assert!(hits("ｓｉｚｅ：＞１０ｍｂ", &photo));
+
+    let parsed = parse_query_at("size:huge c:", NOW);
+    assert!(parsed.filters.is_empty(), "読めない値は条件にしない");
+    assert_eq!(parsed.clauses.len(), 2, "普通の検索語として残る");
+    let odd = attr_entry("size:huge.txt", false, 1, NOW);
+    assert!(hits("size:huge", &odd));
   }
 
   fn entry(name: &str, size: u64) -> Arc<CachedEntry> {
