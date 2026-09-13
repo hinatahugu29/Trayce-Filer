@@ -72,9 +72,11 @@ struct CachedEntry {
 }
 
 impl CachedEntry {
-  fn new(path: PathBuf, is_dir: bool) -> Self {
+  /// `metadata` は走査中の `DirEntry::metadata()` を渡す。Windows ではディレクトリ列挙の
+  /// 結果に含まれているので追加の I/O が無い。以前はここで `fs::metadata` を呼び、
+  /// 全ファイルにもう1回ずつディスクアクセスが発生していた。
+  fn new(path: PathBuf, is_dir: bool, metadata: Option<std::fs::Metadata>) -> Self {
     let name = path.file_name().map(|value| value.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string_lossy().to_string());
-    let metadata = std::fs::metadata(&path).ok();
     let size = metadata.as_ref().map(|value| value.len()).unwrap_or(0);
     let modified = metadata.and_then(|value| value.modified().ok()).and_then(|value| value.duration_since(UNIX_EPOCH).ok()).map(|value| value.as_millis()).unwrap_or(0);
     let ext = if is_dir { String::new() } else { path.extension().map(|value| value.to_string_lossy().to_lowercase()).unwrap_or_default() };
@@ -130,24 +132,73 @@ enum SearchCommand {
 
 fn search_worker(app: AppHandle, id: String, entries: Arc<Mutex<Vec<Arc<CachedEntry>>>>, rx: Receiver<SearchCommand>) {
   let mut latest: Option<(u64, SearchOptions)> = None;
+  let mut state = FilterState::default();
   while let Ok(first) = rx.recv() {
     apply_search_command(first, &mut latest);
     while let Ok(next) = rx.try_recv() {
       apply_search_command(next, &mut latest);
     }
-    let Some((request_id, options)) = latest.clone() else { continue };
-    let cached = entries.lock().unwrap().clone();
+    let Some((request_id, options)) = latest.as_ref() else { continue };
+    if let Some(event) = state.run(&entries, &id, *request_id, options) {
+      let _ = app.emit(SEARCH_RESULTS, event);
+    }
+  }
+}
+
+/// 絞り込みの途中結果を持ち越す。
+///
+/// 走査中は数百msごとに再計算が走る。以前は毎回キャッシュ全体をロック下で複製し、
+/// 全件を絞り込み、一致した全件を並べ替えていた（検索語が空なら全件の並べ替え）。
+/// キャッシュはセッション中は末尾に追加されるだけなので、
+/// 条件が同じなら「前回から増えた分」だけを見れば足りる。
+#[derive(Default)]
+struct FilterState {
+  /// キャッシュの手元コピー。ロックは増えた分を写す間だけ取る。
+  local: Vec<Arc<CachedEntry>>,
+  /// `matched` がどこまでの `local` を評価済みか。
+  evaluated: usize,
+  matched: Vec<Arc<CachedEntry>>,
+  /// 前回の結果を出した要求。これが変わったら一致集合を作り直す。
+  request_id: Option<u64>,
+}
+
+impl FilterState {
+  fn run(&mut self, entries: &Mutex<Vec<Arc<CachedEntry>>>, id: &str, request_id: u64, options: &SearchOptions) -> Option<SearchResultsEvent> {
+    {
+      let guard = entries.lock().unwrap();
+      if guard.len() > self.local.len() {
+        self.local.extend_from_slice(&guard[self.local.len()..]);
+      }
+    }
+    let same_request = self.request_id == Some(request_id);
+    if same_request && self.evaluated == self.local.len() {
+      // 条件もキャッシュも変わっていない。同じ結果を IPC で送り直さない。
+      return None;
+    }
+    if !same_request {
+      self.request_id = Some(request_id);
+      self.evaluated = 0;
+      self.matched.clear();
+    }
     let query = parse_query(&options.query);
-    let mut matched = cached.iter().filter(|entry| matches_query(entry, &query, options.match_path)).cloned().collect::<Vec<_>>();
-    let total = matched.len();
-    matched.sort_unstable_by(|a, b| compare_entries(a, b, &options));
+    self.matched.extend(self.local[self.evaluated..].iter().filter(|entry| matches_query(entry, &query, options.match_path)).cloned());
+    self.evaluated = self.local.len();
+
+    let total = self.matched.len();
     let limit = options.limit.unwrap_or(RESULT_LIMIT).min(RESULT_LIMIT);
-    matched.truncate(limit);
-    let event = SearchResultsEvent {
-      id: id.clone(), request_id, matched: total, indexed: cached.len(), truncated: total > matched.len(),
-      entries: matched.into_iter().map(|entry| entry.view.clone()).collect(),
-    };
-    let _ = app.emit(SEARCH_RESULTS, event);
+    // 表示するのは先頭 limit 件だけ。全件を並べ替えず、上位を選んでから並べる。
+    // matched の並び自体に意味は無いので、その場で並べ替えてよい。
+    let compare = |a: &Arc<CachedEntry>, b: &Arc<CachedEntry>| compare_entries(a, b, options);
+    if limit > 0 && total > limit {
+      self.matched.select_nth_unstable_by(limit - 1, compare);
+    }
+    let shown = total.min(limit);
+    let mut top = self.matched[..shown].to_vec();
+    top.sort_unstable_by(compare);
+    Some(SearchResultsEvent {
+      id: id.to_string(), request_id, matched: total, indexed: self.local.len(), truncated: total > shown,
+      entries: top.into_iter().map(|entry| entry.view.clone()).collect(),
+    })
   }
 }
 
@@ -218,7 +269,7 @@ where F: FnMut(Vec<Arc<CachedEntry>>, usize) {
       let Ok(kind) = item.file_type() else { warnings += 1; continue };
       let path = item.path();
       if kind.is_dir() && !kind.is_symlink() { stack.push(path.clone()); }
-      batch.push(Arc::new(CachedEntry::new(path, kind.is_dir())));
+      batch.push(Arc::new(CachedEntry::new(path, kind.is_dir(), item.metadata().ok())));
       indexed += 1;
       let interval = if indexed < 20_000 { 150 } else if indexed < 40_000 { 300 } else { 500 };
       if batch.len() >= 1000 && last_update.elapsed() >= Duration::from_millis(interval) {
@@ -233,25 +284,28 @@ where F: FnMut(Vec<Arc<CachedEntry>>, usize) {
 
 fn normalize(value: &str) -> String { value.replace('\u{3000}', " ").to_lowercase() }
 
-#[derive(Debug, PartialEq, Eq)]
-enum QueryToken { Include(String), Exclude(String) }
-type Query = Vec<Vec<QueryToken>>;
+/// 空白区切りの1語。`|` で並べた候補のどれかを含み、`!`/`-` の語をどれも含まない。
+/// 含む語と除く語を解析時に分けておき、全件に対する判定でメモリ確保をしない。
+#[derive(Debug, Default, PartialEq, Eq)]
+struct QueryClause { include: Vec<String>, exclude: Vec<String> }
+type Query = Vec<QueryClause>;
 fn parse_query(query: &str) -> Query {
   normalize(query).split_whitespace().filter_map(|part| {
-    let tokens = part.split('|').filter_map(|value| {
-      let value = value.trim();
+    let mut clause = QueryClause::default();
+    for value in part.split('|').map(str::trim) {
       if let Some(term) = value.strip_prefix('!').or_else(|| value.strip_prefix('-')) {
-        (!term.is_empty()).then(|| QueryToken::Exclude(term.replace('/', "\\")))
-      } else { (!value.is_empty()).then(|| QueryToken::Include(value.replace('/', "\\"))) }
-    }).collect::<Vec<_>>();
-    (!tokens.is_empty()).then_some(tokens)
+        if !term.is_empty() { clause.exclude.push(term.replace('/', "\\")); }
+      } else if !value.is_empty() {
+        clause.include.push(value.replace('/', "\\"));
+      }
+    }
+    (!clause.include.is_empty() || !clause.exclude.is_empty()).then_some(clause)
   }).collect()
 }
 fn matches_query(entry: &CachedEntry, query: &Query, match_path: bool) -> bool {
-  let contains = |term: &str| entry.name_lower.contains(term) || (match_path && entry.path_lower.contains(term));
+  let contains = |term: &String| entry.name_lower.contains(term.as_str()) || (match_path && entry.path_lower.contains(term.as_str()));
   query.iter().all(|clause| {
-    let includes = clause.iter().filter_map(|token| if let QueryToken::Include(term) = token { Some(term) } else { None }).collect::<Vec<_>>();
-    clause.iter().all(|token| !matches!(token, QueryToken::Exclude(term) if contains(term))) && (includes.is_empty() || includes.iter().any(|term| contains(term)))
+    !clause.exclude.iter().any(contains) && (clause.include.is_empty() || clause.include.iter().any(contains))
   })
 }
 
@@ -310,10 +364,58 @@ mod tests {
 
   #[test]
   fn query_supports_and_or_exclusion() {
-    let entry = CachedEntry::new(PathBuf::from(r"C:\Assets\Blue Icon.png"), false);
+    let entry = CachedEntry::new(PathBuf::from(r"C:\Assets\Blue Icon.png"), false, None);
     assert!(matches_query(&entry, &parse_query("blue jpg|png !draft"), true));
     assert!(!matches_query(&entry, &parse_query("blue !assets"), true));
     assert!(!matches_query(&entry, &parse_query("assets"), false));
+    assert!(!matches_query(&entry, &parse_query("jpg|!icon"), false), "同じ語の中の除外も効く");
+  }
+
+  fn entry(name: &str, size: u64) -> Arc<CachedEntry> {
+    let mut cached = CachedEntry::new(PathBuf::from(format!(r"C:\root\{name}")), false, None);
+    cached.view.size = size;
+    Arc::new(cached)
+  }
+
+  fn options(query: &str, sort_key: &str, limit: usize) -> SearchOptions {
+    SearchOptions { query: query.into(), match_path: false, sort_key: sort_key.into(), descending: false, dirs_first: true, limit: Some(limit) }
+  }
+
+  fn names(event: &SearchResultsEvent) -> Vec<&str> {
+    event.entries.iter().map(|entry| entry.name.as_str()).collect()
+  }
+
+  /// 上位だけを選んでから並べても、全件を並べて切った結果と一致すること。
+  #[test]
+  fn filter_returns_the_sorted_top_results_and_the_full_match_count() {
+    let entries = Mutex::new((0..50).map(|i| entry(&format!("f{i:02}.txt"), (i * 37 % 50) as u64)).collect::<Vec<_>>());
+    let mut state = FilterState::default();
+    let event = state.run(&entries, "s", 1, &options("", "size", 5)).unwrap();
+    assert_eq!(event.matched, 50);
+    assert!(event.truncated);
+    let sizes: Vec<u64> = event.entries.iter().map(|entry| entry.size).collect();
+    assert_eq!(sizes, vec![0, 1, 2, 3, 4]);
+  }
+
+  /// 走査で増えた分だけを追加評価し、条件が変わったら作り直す。
+  #[test]
+  fn filter_state_tracks_new_entries_and_resets_on_a_new_request() {
+    let entries = Mutex::new(vec![entry("apple.txt", 1), entry("banana.txt", 2)]);
+    let mut state = FilterState::default();
+    let first = state.run(&entries, "s", 1, &options("a", "name", 10)).unwrap();
+    assert_eq!(names(&first), vec!["apple.txt", "banana.txt"]);
+
+    assert!(state.run(&entries, "s", 1, &options("a", "name", 10)).is_none(), "変化が無ければ送り直さない");
+
+    entries.lock().unwrap().push(entry("avocado.txt", 3));
+    entries.lock().unwrap().push(entry("cherry.txt", 4));
+    let grown = state.run(&entries, "s", 1, &options("a", "name", 10)).unwrap();
+    assert_eq!(names(&grown), vec!["apple.txt", "avocado.txt", "banana.txt"]);
+    assert_eq!(grown.indexed, 4);
+
+    let narrowed = state.run(&entries, "s", 2, &options("cherry", "name", 10)).unwrap();
+    assert_eq!(names(&narrowed), vec!["cherry.txt"]);
+    assert_eq!(narrowed.matched, 1);
   }
 
   #[test]
