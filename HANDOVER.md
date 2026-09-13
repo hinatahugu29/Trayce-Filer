@@ -92,6 +92,7 @@ results available as normal copy/move/preview/tray sources.
 - Splitting from a search pane now clones its roots, query, sort, matching, preview/history presentation, and recent words into an independent new pane. This makes side-by-side variations possible without rebuilding the search context; directory-to-search splitting still starts with a clean search scoped to that directory.
 - `SPEC.md` now provides a product-facing description of the Tauri Filer, separating implemented behavior, design principles, candidate directions, non-goals, interview questions, and reusable prompts for consulting other AI systems.
 - The window registry now receives the active tab label, total tab count, and every visible pane's ID, kind, path, query, and active state. The compact overlay groups those panes beneath their owning window, includes pane context in filtering, and can focus a specific pane through a targeted cross-WebView event. Other tabs remain represented by count only to avoid flattening the hierarchy into an unreadable list.
+- Workbench window cards now contain a pane map for the active tab. Selecting a pane changes both the real Filer target and the card body; directory panes load their own mini listing, while search panes show their query/context without pretending to be directories. Directory pane tiles are explicit drop targets, including transfers between two panes in the same window, and search panes reject destination drops.
 
 ## Key integration points
 
@@ -178,6 +179,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Completed the accessible search-history track in four isolated changes: persistent search-location storage, a visible search history rail, favorite-folder reuse from search, and context-preserving search splits. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 80 Rust tests (1 ignored benchmark), production build, and diff checks.
 - 2026-09-13: Added `SPEC.md` as the product and interview document. It deliberately avoids treating roadmap ideas as implemented requirements and points engineering follow-ups back to this handover.
 - 2026-09-13: Brought active pane topology into the compact window list in three commits: registry schema and tests, live Filer publication, then grouped child rows with targeted pane activation. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 81 Rust tests (1 ignored benchmark), production build, and diff checks.
+- 2026-09-13: Extended the same topology into Workbench cards. Added a selectable pane map, selected-pane content switching, search-pane context presentation, pane-specific drop targets, and same-window cross-pane transfers. Frontend diagnostics, 48 tests, production build, and diff checks passed; the unchanged Rust layer retains its 81 passing tests plus 1 ignored benchmark.
 
 ## Commit log
 
@@ -229,3 +231,6 @@ Each slice gets its own implementation commit followed by verification and a han
 - `85b0fbc` — `feat: publish live pane layout from filer windows`
 - `da1f4fa` — `feat: show pane children in window list`
 - `d46d976` — `feat: activate panes from window list`
+- `43ad7b7` — `feat: map panes inside workbench cards`
+- `ecc0709` — `feat: target workbench transfers by pane`
+- `393525e` — `docs: clarify pane-level workbench actions`
