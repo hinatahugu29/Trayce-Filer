@@ -295,8 +295,23 @@
   let conflictRequest: ConflictRequest | null = null
   const conflicts = createConflictPrompt((request) => (conflictRequest = request))
 
-  /** 戻り値は転送を始めたか。衝突の確認で取りやめた場合は false。 */
-  async function runTransfer(paths: string[], dest: string, moveFiles: boolean): Promise<boolean> {
+  /**
+   * 転送の順番待ち。
+   *
+   * 以前は転送中に次を始めると、動いている転送の ID を上書きして進捗も完了も見失っていた。
+   * 衝突の確認は依頼した時点で済ませ、選んだ扱いを持ったまま順に流す。
+   */
+  type TransferJob = { paths: string[]; dest: string; moveFiles: boolean; conflict: api.ConflictPolicy; fromTray: boolean }
+  let queue: TransferJob[] = []
+  /** 開始を依頼して ID が返るまでの間。完了がこの間に届くことがある（小さな転送）。 */
+  let startingTransfer = false
+  let earlyProgress: api.ProgressEvent | null = null
+  let earlyDone: api.DoneEvent | null = null
+
+  $: transferBusy = transferId !== null || startingTransfer
+
+  /** 戻り値は転送を始めた（または順番待ちに入れた）か。衝突の確認で取りやめた場合は false。 */
+  async function runTransfer(paths: string[], dest: string, moveFiles: boolean, fromTray = false): Promise<boolean> {
     if (conflicts.open) return false
     try {
       const conflict = await conflicts.ask(paths, dest, moveFiles)
@@ -304,7 +319,13 @@
         onNote(`${moveFiles ? '移動' : 'コピー'}を取りやめました`)
         return false
       }
-      transferId = await api.startTransfer(paths, dest, moveFiles, conflict)
+      const job: TransferJob = { paths, dest, moveFiles, conflict, fromTray }
+      if (transferBusy) {
+        queue = [...queue, job]
+        onNote(`順番待ちに追加しました（${queue.length}件目）`)
+        return true
+      }
+      await startJob(job)
       return true
     } catch (e) {
       error = String(e)
@@ -312,11 +333,69 @@
     }
   }
 
+  async function startJob(job: TransferJob) {
+    startingTransfer = true
+    earlyProgress = null
+    earlyDone = null
+    trayTransfer = job.fromTray ? { moveFiles: job.moveFiles } : null
+    try {
+      transferId = await api.startTransfer(job.paths, job.dest, job.moveFiles, job.conflict)
+    } catch (e) {
+      trayTransfer = null
+      error = String(e)
+      onNote(`転送を開始できません: ${e}`)
+      startingTransfer = false
+      await startNextJob()
+      return
+    }
+    startingTransfer = false
+    // await の間にイベントの受け口が書き換えるので、ここで読み直す
+    // （関数の先頭で null を入れたままだと型の上では null に絞り込まれてしまう）。
+    const bufferedProgress = earlyProgress as api.ProgressEvent | null
+    const bufferedDone = earlyDone as api.DoneEvent | null
+    earlyProgress = null
+    earlyDone = null
+    if (bufferedProgress && bufferedProgress.id === transferId) progress = bufferedProgress
+    if (bufferedDone && bufferedDone.id === transferId) await finishTransfer(bufferedDone)
+  }
+
+  async function startNextJob() {
+    const [next, ...rest] = queue
+    if (!next) return
+    queue = rest
+    await startJob(next)
+  }
+
+  function clearQueue() {
+    const count = queue.length
+    queue = []
+    if (count) onNote(`順番待ちの ${count}件 を取り消しました`)
+  }
+
+  async function finishTransfer(payload: api.DoneEvent) {
+    const { cancelled, created, completedSources, error: err } = payload
+    const completedTrayMove = trayTransfer?.moveFiles ? completedSources : []
+    progress = null
+    transferId = null
+    trayTransfer = null
+
+    if (completedTrayMove.length) onTrayRemoveMany(completedTrayMove)
+
+    if (err) {
+      error = err
+      onNote(`転送に失敗: ${err}`)
+    } else if (cancelled) {
+      onNote('転送を中断しました')
+    } else {
+      onNote(`転送 ${created}件`)
+    }
+    await reload()
+    await startNextJob()
+  }
+
   async function transferTray(paths: string[], moveFiles: boolean) {
-    if (!listing || !paths.length || transferId !== null) return
-    trayTransfer = { moveFiles }
-    await runTransfer(paths, listing.path, moveFiles)
-    if (transferId === null) trayTransfer = null
+    if (!listing || !paths.length) return
+    await runTransfer(paths, listing.path, moveFiles, true)
   }
 
   /** 同じ列をもう一度押したら昇順/降順を反転する。 */
@@ -703,30 +782,16 @@
     await open(initialPath)
 
     // 転送イベントは窓全体に飛ぶので、自分が始めたものだけ拾う。
+    // 開始の応答（ID）より先に届いた分は、ID が分かるまで預かっておく。
+    // 捨てると、小さな転送で完了を見逃し「転送中」のまま次の順番待ちも動かなくなる。
     unlistenProgress = await listen<api.ProgressEvent>(api.TRANSFER_PROGRESS, (ev) => {
-      if (ev.payload.id !== transferId) return
-      progress = ev.payload
+      if (ev.payload.id === transferId) progress = ev.payload
+      else if (startingTransfer) earlyProgress = ev.payload
     })
 
     unlistenDone = await listen<api.DoneEvent>(api.TRANSFER_DONE, async (ev) => {
-      if (ev.payload.id !== transferId) return
-      const { cancelled, created, completedSources, error: err } = ev.payload
-      const completedTrayMove = trayTransfer?.moveFiles ? completedSources : []
-      progress = null
-      transferId = null
-      trayTransfer = null
-
-      if (completedTrayMove.length) onTrayRemoveMany(completedTrayMove)
-
-      if (err) {
-        error = err
-        onNote(`転送に失敗: ${err}`)
-      } else if (cancelled) {
-        onNote('転送を中断しました')
-      } else {
-        onNote(`転送 ${created}件`)
-      }
-      await reload()
+      if (ev.payload.id === transferId) await finishTransfer(ev.payload)
+      else if (startingTransfer) earlyDone = ev.payload
     })
 
     // 外で作られたファイルが見えないままだと、ファイラとして信用できない。
@@ -1005,7 +1070,7 @@
     {/if}
   </div>
 
-  <TransferBar {progress} />
+  <TransferBar {progress} queued={queue.length} onClearQueue={clearQueue} />
   <ConflictDialog request={conflictRequest} onChoose={conflicts.choose} />
   <BulkRenameDialog paths={bulkRenamePaths} onClose={() => (bulkRenamePaths = null)} onApplied={finishBulkRename} />
 

@@ -4,6 +4,9 @@
   import type { ProgressEvent } from './api'
 
   export let progress: ProgressEvent | null = null
+  /** 今の転送の後に控えている件数。 */
+  export let queued = 0
+  export let onClearQueue: () => void = () => {}
 
   $: ratio =
     progress && progress.bytesTotal > 0
@@ -38,6 +41,10 @@
       <span class="current" title={progress.current}>{name}</span>
     {/if}
 
+    {#if queued > 0}
+      <span class="queued" title="今の転送が終わると順に始まります">待ち {queued}件</span>
+      <button type="button" class="secondary" title="順番待ちを取り消す（今の転送は続けます）" on:click={onClearQueue}>待ちを取消</button>
+    {/if}
     <button type="button" on:click={() => api.cancelTransfer(progress.id)}>中断</button>
   </div>
 {/if}
@@ -127,5 +134,22 @@
   }
   button:hover {
     background: #3f6396;
+  }
+
+  .queued {
+    flex: none;
+    padding: 1px 6px;
+    border: 1px solid #4c6f99;
+    border-radius: 9px;
+    color: #cfe0f5;
+    font-variant-numeric: tabular-nums;
+  }
+  button.secondary {
+    background: transparent;
+    border-color: #4c6f99;
+    color: #b9cbe4;
+  }
+  button.secondary:hover {
+    background: #2a3d55;
   }
 </style>
