@@ -37,6 +37,8 @@
   let showPreview = search.showPreview ?? settings.showPreview
   let showHistory = search.showHistory ?? true
   let locationHistory: api.SearchLocationEntry[] = []
+  let favoriteLocations: string[] = []
+  $: currentSingleScopeFavorite = scopes.length === 1 && favoriteLocations.some((path) => api.pathIdentity(path) === api.pathIdentity(scopes[0]))
   let sort: api.SortSpec = {
     key: search.sortKey ?? settings.sortKey,
     descending: search.sortDescending ?? settings.sortDescending,
@@ -111,7 +113,10 @@
   }
 
   async function refreshLocationHistory() {
-    locationHistory = await api.listSearchLocations()
+    ;[locationHistory, favoriteLocations] = await Promise.all([
+      api.listSearchLocations(),
+      api.listFavorites(),
+    ])
   }
 
   function locationLabel(paths: string[]): string {
@@ -133,6 +138,15 @@
   async function clearLocationHistory() {
     await api.clearSearchLocations()
     locationHistory = []
+  }
+
+  async function toggleCurrentScopeFavorite() {
+    if (scopes.length !== 1) {
+      onNote('複数の検索場所はまとめてお気に入り登録できません')
+      return
+    }
+    await api.toggleFavorite(scopes[0])
+    favoriteLocations = await api.listFavorites()
   }
 
   function nextRequestId(): string {
@@ -389,6 +403,32 @@
       <aside class="history-rail">
         <section>
           <div class="rail-heading">
+            <strong>★ よく使う場所</strong>
+            <button
+              type="button"
+              class:starred={currentSingleScopeFavorite}
+              title={currentSingleScopeFavorite ? '現在の検索場所をお気に入りから外す' : '現在の検索場所をお気に入りに追加'}
+              on:click={toggleCurrentScopeFavorite}
+            >{currentSingleScopeFavorite ? '★' : '☆'}</button>
+          </div>
+          {#if favoriteLocations.length === 0}
+            <p class="rail-empty">ファイラーで登録したお気に入りも、ここに並びます。</p>
+          {:else}
+            <div class="rail-list">
+              {#each favoriteLocations as path}
+                <div class="rail-item" class:current={scopes.length === 1 && api.pathIdentity(path) === api.pathIdentity(scopes[0])}>
+                  <button class="rail-main" type="button" title={path} on:click={() => revisitLocation([path])}>
+                    <span>★ {splitPath(path).tail || path}</span>
+                    <small>{path}</small>
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </section>
+
+        <section>
+          <div class="rail-heading">
             <strong>検索した場所</strong>
             {#if locationHistory.length}<button type="button" title="検索場所の履歴を消去" on:click={clearLocationHistory}>消去</button>{/if}
           </div>
@@ -496,6 +536,7 @@
   .history-rail section + section { border-top: 1px solid #303438; }
   .rail-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; color: #b9c2c9; font-size: 11px; }
   .rail-heading button { height: 20px; border: 0; background: transparent; color: #77828a; font-size: 9px; }
+  .rail-heading button.starred { color: #f1c75b; }
   .rail-empty { margin: 6px 2px; color: #69737a; font-size: 10px; line-height: 1.5; }
   .rail-list { display: flex; flex-direction: column; gap: 2px; }
   .rail-item { display: flex; min-width: 0; border-radius: 4px; }
