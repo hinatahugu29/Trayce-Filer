@@ -10,7 +10,7 @@
   import ContextMenu from './ContextMenu.svelte'
   import type { MenuItem } from './ContextMenu.svelte'
   import ConflictDialog from './ConflictDialog.svelte'
-  import type { ConflictRequest } from './ConflictDialog.svelte'
+  import { createConflictPrompt, type ConflictRequest } from './conflicts'
   import FolderSummary from './FolderSummary.svelte'
   import { resolveKey, matchAction } from './shortcuts'
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
@@ -277,32 +277,15 @@
   let transferId: number | null = null
   let trayTransfer: { moveFiles: boolean } | null = null
 
-  /** 衝突の確認ダイアログ。開いている間は resolveConflict が選択を待っている。 */
+  /** 衝突の確認ダイアログ。転送先に同名があれば選んでもらう。 */
   let conflictRequest: ConflictRequest | null = null
-  let resolveConflict: ((policy: api.ConflictPolicy | null) => void) | null = null
-
-  /** 転送先に同名があれば選んでもらう。無ければ確認なしで進める。null は取りやめ。 */
-  async function askConflictPolicy(paths: string[], dest: string, moveFiles: boolean) {
-    const names = await api.transferConflicts(paths, dest)
-    if (!names.length) return 'rename' as const
-    return new Promise<api.ConflictPolicy | null>((resolve) => {
-      conflictRequest = { names, moveFiles }
-      resolveConflict = resolve
-    })
-  }
-
-  function chooseConflict(policy: api.ConflictPolicy | null) {
-    const resolve = resolveConflict
-    conflictRequest = null
-    resolveConflict = null
-    resolve?.(policy)
-  }
+  const conflicts = createConflictPrompt((request) => (conflictRequest = request))
 
   /** 戻り値は転送を始めたか。衝突の確認で取りやめた場合は false。 */
   async function runTransfer(paths: string[], dest: string, moveFiles: boolean): Promise<boolean> {
-    if (conflictRequest) return false
+    if (conflicts.open) return false
     try {
-      const conflict = await askConflictPolicy(paths, dest, moveFiles)
+      const conflict = await conflicts.ask(paths, dest, moveFiles)
       if (!conflict) {
         onNote(`${moveFiles ? '移動' : 'コピー'}を取りやめました`)
         return false
@@ -979,7 +962,7 @@
   </div>
 
   <TransferBar {progress} />
-  <ConflictDialog request={conflictRequest} onChoose={chooseConflict} />
+  <ConflictDialog request={conflictRequest} onChoose={conflicts.choose} />
 
   <div class="count">
     {listing?.entries.length ?? 0} 件{#if selection.length}<span class="sel"

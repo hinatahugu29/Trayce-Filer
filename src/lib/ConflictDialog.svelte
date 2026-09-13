@@ -1,10 +1,7 @@
-<script lang="ts" context="module">
-  export type ConflictRequest = { names: string[]; moveFiles: boolean }
-</script>
-
 <script lang="ts">
   import { tick } from 'svelte'
   import type { ConflictPolicy } from './api'
+  import type { ConflictRequest } from './conflicts'
 
   /** null なら閉じている。 */
   export let request: ConflictRequest | null = null
