@@ -11,6 +11,7 @@ import {
   pathIdentity,
   foldForSearch,
 } from './api'
+import normalizeFixture from '../../tests/fixtures/search-normalize.json'
 
 describe('splitPath', () => {
   it('末尾のフォルダ名と上位階層を分ける', () => {
@@ -89,18 +90,9 @@ describe('pathIdentity', () => {
 })
 
 describe('foldForSearch', () => {
-  it('英字の大文字小文字と全角半角を同一視する', () => {
-    expect(foldForSearch('ＡＢＣ　ｘｙｚ１２３')).toBe('abc xyz123')
-    expect(foldForSearch('Report.PDF')).toBe('report.pdf')
-  })
-
-  it('半角カナを全角にし、濁点・半濁点を合成する', () => {
-    expect(foldForSearch('ｶﾞｲﾄﾞ ﾊﾟﾝﾌ ﾃﾞｰﾀ ｳﾞｧ')).toBe('ガイド パンフ データ ヴァ')
-    expect(foldForSearch('ﾂﾞ ﾄﾞ ﾁﾞ ﾎﾟ')).toBe('ヅ ド ヂ ポ')
-  })
-
-  it('合成できない濁点は独立した記号として残す（Rust 側と同じ結果）', () => {
-    expect(foldForSearch('ｱﾞ')).toBe('ア゛')
+  // Rust の search::normalize と同じ表で確かめ、片方だけ規則が変わる事故を防ぐ。
+  it.each(normalizeFixture.normalize)('$note: $input → $expected', ({ input, expected }) => {
+    expect(foldForSearch(input)).toBe(expected)
   })
 
   it('全角で打った語が半角カナの名前に一致する', () => {

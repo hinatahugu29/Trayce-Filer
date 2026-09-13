@@ -480,13 +480,17 @@ mod tests {
     assert!(!matches_query(&entry, &parse_query("jpg|!icon"), false), "同じ語の中の除外も効く");
   }
 
+  /// TypeScript の foldForSearch と同じ表（tests/fixtures/search-normalize.json）で確かめる。
+  /// 片方だけ規則を変えると、検索ペインとフォルダ内絞り込みで一致の結果が食い違う。
   #[test]
-  fn normalize_folds_case_width_and_halfwidth_kana() {
-    assert_eq!(normalize("ＡＢＣ　ｘｙｚ１２３"), "abc xyz123");
-    assert_eq!(normalize("Report.PDF"), "report.pdf");
-    assert_eq!(normalize("ｶﾞｲﾄﾞ ﾊﾟﾝﾌ ﾃﾞｰﾀ ｳﾞｧ"), "ガイド パンフ データ ヴァ");
-    assert_eq!(normalize("ｱﾞ"), "ア゛", "合成できない濁点は独立した記号として残す");
-    assert_eq!(normalize("ﾂﾞ ﾄﾞ ﾁﾞ ﾎﾟ"), "ヅ ド ヂ ポ");
+  fn normalize_matches_the_shared_fixture() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("../../tests/fixtures/search-normalize.json")).unwrap();
+    let cases = fixture["normalize"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+      let (input, expected) = (case["input"].as_str().unwrap(), case["expected"].as_str().unwrap());
+      assert_eq!(normalize(input), expected, "{}", case["note"]);
+    }
   }
 
   /// 全角で打った検索語・除外・OR が、半角の名前にも効くこと。
