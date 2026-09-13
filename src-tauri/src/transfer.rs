@@ -55,7 +55,10 @@ pub fn start_transfer(
   paths: Vec<String>,
   dest: String,
   move_files: bool,
+  // 省略時（古い呼び出し）は従来どおり別名で置く。
+  conflict: Option<super::fs_ops::ConflictPolicy>,
 ) -> u64 {
+  let conflict = conflict.unwrap_or_default();
   let id = {
     let state = app.state::<Transfers>();
     let mut next = state.next_id.lock().unwrap();
@@ -127,7 +130,7 @@ pub fn start_transfer(
     };
 
     let result =
-      super::fs_ops::transfer_pub(&paths, &dest, move_files, &cancel, &mut on_progress);
+      super::fs_ops::transfer_pub(&paths, &dest, move_files, conflict, &cancel, &mut on_progress);
 
     let cancelled = cancel.load(Ordering::Relaxed);
     let (created, error, completed_sources) = match result {

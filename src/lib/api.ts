@@ -187,9 +187,23 @@ export type DoneEvent = {
   completedSources: string[]
 }
 
+/**
+ * 転送先に同名があった時の扱い。
+ * rename は `name (2)` で両方残す。overwrite は既存をゴミ箱へ送ってから置く。skip は転送しない。
+ */
+export type ConflictPolicy = 'rename' | 'overwrite' | 'skip'
+
+/** 転送先で名前が衝突する項目名。空なら選択肢を出さずに転送してよい。 */
+export const transferConflicts = (paths: string[], dest: string) =>
+  invoke<string[]>('transfer_conflicts', { paths, dest })
+
 /** 別スレッドでコピー/移動を始める。戻り値は中断に使う ID。 */
-export const startTransfer = (paths: string[], dest: string, moveFiles: boolean) =>
-  invoke<number>('start_transfer', { paths, dest, moveFiles })
+export const startTransfer = (
+  paths: string[],
+  dest: string,
+  moveFiles: boolean,
+  conflict: ConflictPolicy = 'rename',
+) => invoke<number>('start_transfer', { paths, dest, moveFiles, conflict })
 export const cancelTransfer = (id: number) => invoke<void>('cancel_transfer', { id })
 export const TRANSFER_PROGRESS = 'transfer-progress'
 export const TRANSFER_DONE = 'transfer-done'

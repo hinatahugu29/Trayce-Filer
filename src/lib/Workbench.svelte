@@ -6,6 +6,28 @@
   import { splitPath, pathHue, elideLeft, formatSize, joinPath } from './api'
   import type { WindowInfo, WindowPaneInfo, Entry } from './api'
   import TransferBar from './TransferBar.svelte'
+  import ConflictDialog from './ConflictDialog.svelte'
+  import type { ConflictRequest } from './ConflictDialog.svelte'
+
+  /** 衝突の確認ダイアログ。開いている間は resolveConflict が選択を待っている。 */
+  let conflictRequest: ConflictRequest | null = null
+  let resolveConflict: ((policy: api.ConflictPolicy | null) => void) | null = null
+
+  async function askConflictPolicy(paths: string[], dest: string, moveFiles: boolean) {
+    const names = await api.transferConflicts(paths, dest)
+    if (!names.length) return 'rename' as const
+    return new Promise<api.ConflictPolicy | null>((resolve) => {
+      conflictRequest = { names, moveFiles }
+      resolveConflict = resolve
+    })
+  }
+
+  function chooseConflict(policy: api.ConflictPolicy | null) {
+    const resolve = resolveConflict
+    conflictRequest = null
+    resolveConflict = null
+    resolve?.(policy)
+  }
 
   export let windows: WindowInfo[] = []
   export let pinned: boolean = false
@@ -227,7 +249,7 @@
     ev.preventDefault()
     ev.stopPropagation()
     dropTargetKey = null
-    if (activeTransfer) {
+    if (activeTransfer || conflictRequest) {
       onNote('転送中です。完了または中断後にもう一度操作してください')
       return
     }
@@ -245,10 +267,15 @@
     const moveFiles = dragged.fromTray ? ev.shiftKey : !ev.ctrlKey
 
     try {
+      const conflict = await askConflictPolicy(srcPaths, targetDir, moveFiles)
+      if (!conflict) {
+        onNote(`${moveFiles ? '移動' : 'コピー'}を取りやめました`)
+        return
+      }
       startingTransfer = true
       earlyProgress = null
       earlyDone = null
-      const id = await api.startTransfer(srcPaths, targetDir, moveFiles)
+      const id = await api.startTransfer(srcPaths, targetDir, moveFiles, conflict)
       activeTransfer = {
         id,
         srcWindowLabel,
@@ -569,6 +596,7 @@
     </div>
   {/if}
   <TransferBar {progress} />
+  <ConflictDialog request={conflictRequest} onChoose={chooseConflict} />
 </div>
 
 <style>

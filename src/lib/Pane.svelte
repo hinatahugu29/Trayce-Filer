@@ -9,6 +9,8 @@
   import Preview from './Preview.svelte'
   import ContextMenu from './ContextMenu.svelte'
   import type { MenuItem } from './ContextMenu.svelte'
+  import ConflictDialog from './ConflictDialog.svelte'
+  import type { ConflictRequest } from './ConflictDialog.svelte'
   import FolderSummary from './FolderSummary.svelte'
   import { resolveKey, matchAction } from './shortcuts'
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
@@ -220,9 +222,10 @@
     try {
       const data = await api.getClipboard()
       if (!data.paths.length) return
-      await runTransfer(data.paths, listing.path, data.cut)
+      const started = await runTransfer(data.paths, listing.path, data.cut)
       // 切り取りは一度きり。二度目は元が無いので消しておく。
-      if (data.cut) await api.setClipboard([], false)
+      // 衝突の確認で取りやめた場合は、まだ何も動いていないので残す。
+      if (data.cut && started) await api.setClipboard([], false)
     } catch (e) {
       onNote(`貼り付け失敗: ${e}`)
       error = String(e)
@@ -274,11 +277,41 @@
   let transferId: number | null = null
   let trayTransfer: { moveFiles: boolean } | null = null
 
-  async function runTransfer(paths: string[], dest: string, moveFiles: boolean) {
+  /** 衝突の確認ダイアログ。開いている間は resolveConflict が選択を待っている。 */
+  let conflictRequest: ConflictRequest | null = null
+  let resolveConflict: ((policy: api.ConflictPolicy | null) => void) | null = null
+
+  /** 転送先に同名があれば選んでもらう。無ければ確認なしで進める。null は取りやめ。 */
+  async function askConflictPolicy(paths: string[], dest: string, moveFiles: boolean) {
+    const names = await api.transferConflicts(paths, dest)
+    if (!names.length) return 'rename' as const
+    return new Promise<api.ConflictPolicy | null>((resolve) => {
+      conflictRequest = { names, moveFiles }
+      resolveConflict = resolve
+    })
+  }
+
+  function chooseConflict(policy: api.ConflictPolicy | null) {
+    const resolve = resolveConflict
+    conflictRequest = null
+    resolveConflict = null
+    resolve?.(policy)
+  }
+
+  /** 戻り値は転送を始めたか。衝突の確認で取りやめた場合は false。 */
+  async function runTransfer(paths: string[], dest: string, moveFiles: boolean): Promise<boolean> {
+    if (conflictRequest) return false
     try {
-      transferId = await api.startTransfer(paths, dest, moveFiles)
+      const conflict = await askConflictPolicy(paths, dest, moveFiles)
+      if (!conflict) {
+        onNote(`${moveFiles ? '移動' : 'コピー'}を取りやめました`)
+        return false
+      }
+      transferId = await api.startTransfer(paths, dest, moveFiles, conflict)
+      return true
     } catch (e) {
       error = String(e)
+      return false
     }
   }
 
@@ -915,6 +948,7 @@
   </div>
 
   <TransferBar {progress} />
+  <ConflictDialog request={conflictRequest} onChoose={chooseConflict} />
 
   <div class="count">
     {listing?.entries.length ?? 0} 件{#if selection.length}<span class="sel"

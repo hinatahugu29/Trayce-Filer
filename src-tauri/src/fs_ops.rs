@@ -257,6 +257,37 @@ pub fn accept_dropped(paths: Vec<String>, dest: String, move_files: bool) -> Res
   Ok(pairs.into_iter().map(|(_, to)| to.to_string_lossy().to_string()).collect())
 }
 
+/// 転送先に同名の項目があった時の扱い。利用者が転送前に選ぶ。
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConflictPolicy {
+  /// `name (2).ext` のように別名で置く。どちらも残る。
+  #[default]
+  Rename,
+  /// 既存をゴミ箱へ送ってから置く。完全には消さないので、ゴミ箱から戻せる。
+  Overwrite,
+  /// 衝突した項目は転送しない。
+  Skip,
+}
+
+/// 転送先で名前が衝突する項目の名前。転送前に選択肢を出すために使う。
+/// 同じ場所への転送（何もしない）は衝突に数えない。
+#[tauri::command]
+pub fn transfer_conflicts(paths: Vec<String>, dest: String) -> Vec<String> {
+  let dest_dir = Path::new(&dest);
+  paths
+    .iter()
+    .filter_map(|p| {
+      let src = Path::new(p);
+      let name = src.file_name()?;
+      if src.parent() == Some(dest_dir) {
+        return None;
+      }
+      dest_dir.join(name).exists().then(|| name.to_string_lossy().to_string())
+    })
+    .collect()
+}
+
 /// 転送の進み具合。
 pub struct Progress {
   pub bytes_done: u64,
@@ -272,10 +303,12 @@ pub fn transfer_pub(
   paths: &[String],
   dest: &str,
   move_files: bool,
+  conflict: ConflictPolicy,
   cancel: &std::sync::atomic::AtomicBool,
   on_progress: &mut dyn FnMut(&Progress, &str),
 ) -> Result<Vec<(PathBuf, PathBuf)>, String> {
-  transfer(paths, dest, move_files, cancel, on_progress)
+  let to_trash = |path: &Path| trash::delete(path).map_err(|e| format!("{} をゴミ箱へ送れません: {e}", path.display()));
+  transfer_with_policy(paths, dest, move_files, conflict, &to_trash, cancel, on_progress)
 }
 
 /// 総量の事前集計。戻り値は (ファイル数, バイト数)。
@@ -315,6 +348,21 @@ fn transfer(
   cancel: &std::sync::atomic::AtomicBool,
   on_progress: &mut dyn FnMut(&Progress, &str),
 ) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+  let never = |_: &Path| Err("別名で置くので既存を退避することはありません".to_string());
+  transfer_with_policy(paths, dest, move_files, ConflictPolicy::Rename, &never, cancel, on_progress)
+}
+
+/// `discard` は上書き時に既存を退かす手段。本番はゴミ箱、テストは通常の削除を渡す
+/// （テストで利用者のゴミ箱を汚さないため）。
+fn transfer_with_policy(
+  paths: &[String],
+  dest: &str,
+  move_files: bool,
+  conflict: ConflictPolicy,
+  discard: &dyn Fn(&Path) -> Result<(), String>,
+  cancel: &std::sync::atomic::AtomicBool,
+  on_progress: &mut dyn FnMut(&Progress, &str),
+) -> Result<Vec<(PathBuf, PathBuf)>, String> {
   use std::sync::atomic::Ordering;
 
   let dest_dir = Path::new(dest);
@@ -343,7 +391,24 @@ fn transfer(
       return Err(format!("{p} を自身の下へは移動できません"));
     }
 
-    let target = unique_target(dest_dir, Path::new(name))?;
+    let direct = dest_dir.join(name);
+    let target = if !direct.exists() {
+      direct
+    } else {
+      match conflict {
+        ConflictPolicy::Rename => unique_target(dest_dir, Path::new(name))?,
+        // 転送しなかった項目は完了に数えない（トレイからも外さない）。
+        ConflictPolicy::Skip => continue,
+        ConflictPolicy::Overwrite => {
+          // 既存が転送元を含んでいると、既存を退かした時点で転送元ごと消える。
+          if src.starts_with(&direct) {
+            return Err(format!("{p} を含む {} は上書きできません", direct.display()));
+          }
+          discard(&direct)?;
+          direct
+        }
+      }
+    };
 
     // 同一ボリューム内の移動は、ファイルでもフォルダでも rename 1回で済む。
     // 以前はファイルしか試しておらず、数GBのフォルダを同じドライブ内で動かすだけで
@@ -951,6 +1016,80 @@ mod tests {
     for file in [to.join("a.txt"), to.join("d/b.txt")] {
       assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), old, "{} の日時が変わった", file.display());
     }
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  fn remove_any(path: &Path) -> Result<(), String> {
+    if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }.map_err(|e| e.to_string())
+  }
+
+  fn with_policy(paths: &[String], dest: &Path, conflict: ConflictPolicy) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    let never = std::sync::atomic::AtomicBool::new(false);
+    transfer_with_policy(paths, &s(dest), false, conflict, &remove_any, &never, &mut |_, _| {})
+  }
+
+  #[test]
+  fn conflicts_list_only_colliding_names_outside_the_same_folder() {
+    let root = scratch("conflicts");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    for name in ["a.txt", "b.txt"] {
+      std::fs::write(from.join(name), b"new").unwrap();
+    }
+    std::fs::write(to.join("A.TXT"), b"old").unwrap();
+
+    let found = transfer_conflicts(vec![s(&from.join("a.txt")), s(&from.join("b.txt"))], s(&to));
+    assert_eq!(found, vec!["a.txt"], "Windows では大文字小文字違いも衝突");
+    assert!(transfer_conflicts(vec![s(&from.join("a.txt"))], s(&from)).is_empty(), "同じ場所は何もしないので衝突ではない");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[test]
+  fn skip_leaves_the_existing_item_and_reports_only_transferred_ones() {
+    let root = scratch("policy_skip");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(from.join("a.txt"), b"new").unwrap();
+    std::fs::write(from.join("b.txt"), b"new").unwrap();
+    std::fs::write(to.join("a.txt"), b"old").unwrap();
+
+    let pairs = with_policy(&[s(&from.join("a.txt")), s(&from.join("b.txt"))], &to, ConflictPolicy::Skip).unwrap();
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].0, from.join("b.txt"));
+    assert_eq!(std::fs::read(to.join("a.txt")).unwrap(), b"old");
+    assert!(!to.join("a (2).txt").exists());
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[test]
+  fn overwrite_discards_the_existing_item_then_places_the_new_one() {
+    let root = scratch("policy_overwrite");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(from.join("d")).unwrap();
+    std::fs::create_dir_all(to.join("d")).unwrap();
+    std::fs::write(from.join("a.txt"), b"new").unwrap();
+    std::fs::write(to.join("a.txt"), b"old").unwrap();
+    std::fs::write(from.join("d/new.txt"), b"n").unwrap();
+    std::fs::write(to.join("d/stale.txt"), b"s").unwrap();
+
+    with_policy(&[s(&from.join("a.txt")), s(&from.join("d"))], &to, ConflictPolicy::Overwrite).unwrap();
+    assert_eq!(std::fs::read(to.join("a.txt")).unwrap(), b"new");
+    assert!(to.join("d/new.txt").exists());
+    assert!(!to.join("d/stale.txt").exists(), "フォルダの上書きは中身を混ぜない");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// `C:\x\a\a` を `C:\x` へ上書きで移すと、既存の `C:\x\a` を退かした時点で転送元が消える。
+  #[test]
+  fn overwrite_refuses_a_target_that_contains_the_source() {
+    let root = scratch("policy_overwrite_parent");
+    std::fs::create_dir_all(root.join("a/a")).unwrap();
+    std::fs::write(root.join("a/a/keep.txt"), b"k").unwrap();
+
+    assert!(with_policy(&[s(&root.join("a/a"))], &root, ConflictPolicy::Overwrite).is_err());
+    assert!(root.join("a/a/keep.txt").exists());
     let _ = std::fs::remove_dir_all(&root);
   }
 

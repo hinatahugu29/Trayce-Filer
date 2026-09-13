@@ -151,6 +151,7 @@ pub fn run() {
       fs_ops::paste_clipboard,
       watch::watch_dir,
       watch::unwatch_dir,
+      fs_ops::transfer_conflicts,
       transfer::start_transfer,
       transfer::cancel_transfer,
       search::start_search,
