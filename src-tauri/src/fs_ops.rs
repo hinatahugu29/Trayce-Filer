@@ -343,7 +343,7 @@ fn transfer(
       return Err(format!("{p} を自身の下へは移動できません"));
     }
 
-    let target = unique_target(dest_dir, Path::new(name));
+    let target = unique_target(dest_dir, Path::new(name))?;
 
     // 同一ボリューム内の移動は、ファイルでもフォルダでも rename 1回で済む。
     // 以前はファイルしか試しておらず、数GBのフォルダを同じドライブ内で動かすだけで
@@ -468,28 +468,33 @@ fn scan_total(paths: &[String]) -> (u64, u64) {
 }
 
 /// 衝突したら `name (2).ext`, `name (3).ext` … と空きを探す。
-fn unique_target(dir: &Path, name: &Path) -> PathBuf {
+///
+/// 空きが見つからなければエラーにする。以前は元の名前を返しており、
+/// コピーの `File::create` がその既存ファイルを黙って上書きしていた。
+fn unique_target(dir: &Path, name: &Path) -> Result<PathBuf, String> {
+  unique_target_within(dir, name, 10_000)
+}
+
+fn unique_target_within(dir: &Path, name: &Path, limit: u32) -> Result<PathBuf, String> {
   let candidate = dir.join(name);
   if !candidate.exists() {
-    return candidate;
+    return Ok(candidate);
   }
 
   let stem = name.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
   let ext = name.extension().map(|s| s.to_string_lossy().to_string());
 
-  for n in 2..10_000 {
+  for n in 2..limit {
     let filename = match &ext {
       Some(e) => format!("{stem} ({n}).{e}"),
       None => format!("{stem} ({n})"),
     };
     let candidate = dir.join(filename);
     if !candidate.exists() {
-      return candidate;
+      return Ok(candidate);
     }
   }
-  // 現実には到達しない。到達したら上書きせずエラーにしたいが、
-  // 戻り値の型上ここでは元の名前を返し、呼び出し側の copy が失敗する。
-  dir.join(name)
+  Err(format!("{} の空き名が見つかりません", name.display()))
 }
 
 fn copy_dir_all(
@@ -585,7 +590,7 @@ fn create_folder_impl(parent: &str, name: &str) -> Result<PathBuf, String> {
   }
   validate_name(name)?;
 
-  let target = unique_target(parent_dir, Path::new(name));
+  let target = unique_target(parent_dir, Path::new(name))?;
   std::fs::create_dir(&target).map_err(|e| format!("作成に失敗: {e}"))?;
   Ok(target)
 }
@@ -946,6 +951,18 @@ mod tests {
     for file in [to.join("a.txt"), to.join("d/b.txt")] {
       assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), old, "{} の日時が変わった", file.display());
     }
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// 空き名が尽きたら、既存を上書きせずに失敗する。
+  #[test]
+  fn running_out_of_free_names_is_an_error_not_an_overwrite() {
+    let root = scratch("unique_exhausted");
+    for name in ["a.txt", "a (2).txt", "a (3).txt"] {
+      std::fs::write(root.join(name), b"keep").unwrap();
+    }
+    assert!(unique_target_within(&root, Path::new("a.txt"), 4).is_err());
+    assert_eq!(unique_target_within(&root, Path::new("a.txt"), 5).unwrap(), root.join("a (4).txt"));
     let _ = std::fs::remove_dir_all(&root);
   }
 
