@@ -10,6 +10,7 @@
   import ContextMenu from './ContextMenu.svelte'
   import type { MenuItem } from './ContextMenu.svelte'
   import ConflictDialog from './ConflictDialog.svelte'
+  import BulkRenameDialog from './BulkRenameDialog.svelte'
   import { createConflictPrompt, type ConflictRequest } from './conflicts'
   import FolderSummary from './FolderSummary.svelte'
   import { resolveKey, matchAction } from './shortcuts'
@@ -420,6 +421,23 @@
   /** リネーム中の対象。null なら非表示。 */
   let renaming: { path: string; value: string } | null = null
 
+  /** 一括名前変更の対象（一覧の表示順）。null なら閉じている。 */
+  let bulkRenamePaths: string[] | null = null
+
+  function startBulkRename() {
+    if (!listing || !selection.length) return
+    // 連番は見えている並び順で振りたい。選択した順ではなく一覧の順に並べ直す。
+    const chosen = new Set(selection.map(api.pathIdentity))
+    const dir = listing.path
+    bulkRenamePaths = entries.map((entry) => api.joinPath(dir, entry.name)).filter((path) => chosen.has(api.pathIdentity(path)))
+  }
+
+  async function finishBulkRename(count: number) {
+    bulkRenamePaths = null
+    onNote(`${count}件の名前を変更しました（Ctrl+Z で戻せます）`)
+    await reload()
+  }
+
   function startRename(entry: Entry) {
     if (!listing) return
     renaming = { path: api.joinPath(listing.path, entry.name), value: entry.name }
@@ -545,6 +563,8 @@
             : []),
           { kind: 'sep' },
           { kind: 'item', label: '名前を変更', hint: hint('rename'), disabled: n !== 1, run: () => startRename(entry) },
+          // 置換・連番・大文字小文字をまとめて。適用前に一覧で確かめられ、Ctrl+Z で戻せる。
+          { kind: 'item', label: n > 1 ? `${n}件の名前をまとめて変更…` : 'まとめて名前を変更…', disabled: n === 0, run: startBulkRename },
           { kind: 'item', label: 'ゴミ箱へ送る', hint: hint('trash'), danger: true, run: () => trashSelection(selection) },
         ]
       : [
@@ -987,6 +1007,7 @@
 
   <TransferBar {progress} />
   <ConflictDialog request={conflictRequest} onChoose={conflicts.choose} />
+  <BulkRenameDialog paths={bulkRenamePaths} onClose={() => (bulkRenamePaths = null)} onApplied={finishBulkRename} />
 
   <div class="count">
     {listing?.entries.length ?? 0} 件{#if selection.length}<span class="sel"

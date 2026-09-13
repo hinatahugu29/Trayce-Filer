@@ -120,6 +120,42 @@ export const createFolder = (parent: string, name: string) =>
   invoke<string>('create_folder', { parent, name })
 export const renameEntry = (path: string, newName: string) =>
   invoke<string>('rename_entry', { path, newName })
+/**
+ * 一括名前変更の規則。拡張子は常にそのまま残る。
+ * `template` の `{name}` は置換後の元の名前、`{n}` は連番（`start` から、`digits` 桁で 0 埋め）。
+ */
+export type RenameRule = {
+  find: string
+  replace: string
+  matchCase: boolean
+  template: string
+  start: number
+  digits: number
+  case: '' | 'lower' | 'upper'
+}
+export const defaultRenameRule = (): RenameRule => ({
+  find: '',
+  replace: '',
+  matchCase: false,
+  template: '{name}',
+  start: 1,
+  digits: 2,
+  case: '',
+})
+export type RenamePreview = {
+  path: string
+  name: string
+  newName: string
+  status: 'ok' | 'unchanged' | 'invalid' | 'conflict'
+  message: string
+}
+/** 規則を当てた結果の一覧。実際には何も変えない。`paths` の並び順で連番を振る。 */
+export const planBulkRename = (paths: string[], rule: RenameRule) =>
+  invoke<RenamePreview[]>('plan_bulk_rename', { paths, rule })
+/** 規則を当てて名前を変える。1件でも問題があれば何も変えない。戻り値は変更した件数。 */
+export const applyBulkRename = (paths: string[], rule: RenameRule) =>
+  invoke<number>('apply_bulk_rename', { paths, rule })
+
 /** ゴミ箱へ送る。完全削除は用意しない（誤操作で戻せないのを避けるため）。 */
 export const trashEntries = (paths: string[]) => invoke<number>('trash_entries', { paths })
 

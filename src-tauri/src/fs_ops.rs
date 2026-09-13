@@ -864,7 +864,7 @@ fn is_same_entry(a: &Path, b: &Path) -> bool {
 ///
 /// 空や区切り文字入りをそのまま渡すと、意図しない場所に作られたり
 /// 分かりにくいOSエラーになる。ここで弾いて理由を返す。
-fn validate_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_name(name: &str) -> Result<(), String> {
   let trimmed = name.trim();
   if trimmed.is_empty() {
     return Err("名前が空です".into());

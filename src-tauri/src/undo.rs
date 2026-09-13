@@ -13,6 +13,8 @@ const HISTORY_CAP: usize = 50;
 pub enum UndoAction {
   /// `to` を `from` の名前へ戻す。
   Rename { from: PathBuf, to: PathBuf },
+  /// 一括名前変更。(元, 先) の組を、二段階の名前変更で元へ戻す（入れ替えを含んでも衝突しない）。
+  BatchRename { pairs: Vec<(PathBuf, PathBuf)> },
   /// 空フォルダを削除して取り消す。中身が増えていたら安全のため諦める。
   CreateFolder { path: PathBuf },
   /// ゴミ箱から元の場所へ復元する。
@@ -36,6 +38,7 @@ impl UndoAction {
   fn label(&self) -> String {
     match self {
       UndoAction::Rename { to, .. } => format!("名前の変更「{}」", name_of(to)),
+      UndoAction::BatchRename { pairs } => format!("一括名前変更（{}件）", pairs.len()),
       UndoAction::CreateFolder { path } => format!("フォルダー作成「{}」", name_of(path)),
       UndoAction::Trash { items } => {
         if items.len() == 1 {
@@ -124,6 +127,14 @@ fn apply_undo(action: UndoAction) -> Result<(), String> {
         return Err(format!("{} が見つかりません（既に変更・削除された可能性があります）", name_of(&to)));
       }
       std::fs::rename(&to, &from).map_err(|e| format!("元に戻せません: {e}"))?;
+    }
+
+    UndoAction::BatchRename { pairs } => {
+      if let Some((_, missing)) = pairs.iter().find(|(_, to)| !to.exists()) {
+        return Err(format!("{} が見つかりません（既に変更・削除された可能性があります）", name_of(missing)));
+      }
+      let reversed: Vec<(PathBuf, PathBuf)> = pairs.into_iter().map(|(from, to)| (to, from)).collect();
+      crate::rename::rename_pairs(&reversed)?;
     }
 
     UndoAction::CreateFolder { path } => {

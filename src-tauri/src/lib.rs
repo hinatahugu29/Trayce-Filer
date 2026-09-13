@@ -1,6 +1,7 @@
 mod archive;
 mod fs_ops;
 mod instance;
+mod rename;
 mod search;
 mod store;
 mod transfer;
@@ -142,6 +143,8 @@ pub fn run() {
       fs_ops::drives,
       fs_ops::create_folder,
       fs_ops::rename_entry,
+      rename::plan_bulk_rename,
+      rename::apply_bulk_rename,
       fs_ops::trash_entries,
       fs_ops::complete_path,
       fs_ops::preview_entry,
