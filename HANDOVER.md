@@ -42,7 +42,7 @@ results available as normal copy/move/preview/tray sources.
 - [x] Phase 12 — share selection, preview, tray, drag, copy, and move behavior with search results
 - [x] Phase 13 — persist and restore search scope, query, options, and result presentation
 - [x] Phase 14 — bring over advanced query/sort/history behavior from `File_Search_APP` selectively
-- [ ] Search history follow-up — expose search-location history as a first-class navigation surface, separate from ordinary folder history and per-pane query history
+- [x] Search history follow-up — expose search-location history as a first-class navigation surface, separate from ordinary folder history and per-pane query history
 - [ ] Search follow-up — profile real-device performance before deciding whether parallel directory walking is beneficial
 
 ## Current status
@@ -85,7 +85,10 @@ results available as normal copy/move/preview/tray sources.
 - Pane creation now exposes both meanings explicitly: `N` duplicates the current directory as a normal pane, `Shift+N` preserves the source pane and adds a search pane scoped to its current directory, and the existing `⌕` action converts the current pane itself to search.
 - Sidebar tree folder names now toggle as well as navigate: the first click expands the folder and a second click collapses it. The separate disclosure arrow remains available for opening or closing without navigation.
 - The directory-pane sidebar can now be split into two stacked information views. Each section independently shows tree, favorites, history, or tray; the divider adjusts their height, either section can collapse back to the original single view, and the composition is restored per pane.
-- Search navigation must remain parallel to directory navigation rather than being folded into it. `File_Search_APP` prominently exposes recently searched roots (up to 15) so a flow such as “search here, then search the place used a moment ago” is one click away. Filer currently has only a compact per-pane query-history selector; it still needs an equally accessible, persistent search-location history surface.
+- Search navigation remains parallel to directory navigation rather than being folded into it. Following `File_Search_APP`, recently searched roots (up to 15) are exposed so a flow such as “search here, then search the place used a moment ago” is one click away.
+- Search panes now show a visible history rail by default. Search-location history is global, persistent, deduplicated case-insensitively on Windows, capped at 15 entries, and kept separate from ordinary navigation history. Selecting a previous location preserves the current search word and immediately re-indexes that location.
+- The same rail exposes the pane-local search-word history as direct buttons and the normal Filer favorites as reusable search locations. A single current root can be added to or removed from favorites in place. The `履` toolbar action collapses the rail, and that choice persists with the search pane.
+- Splitting from a search pane now clones its roots, query, sort, matching, preview/history presentation, and recent words into an independent new pane. This makes side-by-side variations possible without rebuilding the search context; directory-to-search splitting still starts with a clean search scoped to that directory.
 
 ## Key integration points
 
@@ -169,6 +172,7 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Added direct search-pane splitting without replacing the source pane. The toolbar action and configurable `Shift+N` shortcut work from both directory and search panes. Full verification passed.
 - 2026-09-13: Made sidebar tree folder-name activation bidirectional. Repeated clicks now expand and collapse the folder while retaining normal navigation. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 77 Rust tests (1 ignored benchmark), production build, and diff checks.
 - 2026-09-13: Added an optional stacked sidebar. The normal four-tab header remains unchanged until the `↕` action is used; split sections use compact independent selectors and a draggable horizontal divider. Per-pane layout persistence is backward compatible. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 78 Rust tests (1 ignored benchmark), production build, and diff checks.
+- 2026-09-13: Completed the accessible search-history track in four isolated changes: persistent search-location storage, a visible search history rail, favorite-folder reuse from search, and context-preserving search splits. Verification passed with 0 Svelte diagnostics, 48 frontend tests, 80 Rust tests (1 ignored benchmark), production build, and diff checks.
 
 ## Commit log
 
@@ -207,3 +211,9 @@ Each slice gets its own implementation commit followed by verification and a han
 - `5829b11` — `fix: toggle tree folders from their names`
 - `8fb89aa` — `docs: record tree toggle behavior`
 - `19d4bc0` — `feat: split sidebar into stacked views`
+- `68f49da` — `docs: record stacked sidebar milestone`
+- `ddb480a` — `docs: plan accessible search location history`
+- `b70aaa1` — `feat: persist search location history`
+- `2fdd448` — `feat: expose search history in search panes`
+- `cb9bbf2` — `feat: search favorite locations from history rail`
+- `d1f4d2f` — `fix: preserve search context when splitting`
