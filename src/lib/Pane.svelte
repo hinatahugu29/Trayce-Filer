@@ -611,6 +611,9 @@
   let unlistenProgress: UnlistenFn | null = null
   let unlistenDone: UnlistenFn | null = null
   let reloadTimer: number | null = null
+  let firstFsChangeAt: number | null = null
+  const FS_RELOAD_DEBOUNCE = 250
+  const FS_RELOAD_MAX_WAIT = 1000
 
   onMount(async () => {
     await open(initialPath)
@@ -644,13 +647,19 @@
 
     // 外で作られたファイルが見えないままだと、ファイラとして信用できない。
     // 変更通知は連続して飛んでくるので、少し溜めてから1回だけ読み直す。
+    // ただし通知が途切れない間（大量コピーの受け側など）待ち続けると一覧が全く更新されないので、
+    // 最初の通知から一定時間経ったら溜まっていても読み直す。
     unlistenFs = await listen<string>(api.FS_CHANGED, (ev) => {
       if (ev.payload !== listing?.path) return
       if (reloadTimer !== null) clearTimeout(reloadTimer)
+      const now = Date.now()
+      if (firstFsChangeAt === null) firstFsChangeAt = now
+      const delay = now - firstFsChangeAt >= FS_RELOAD_MAX_WAIT ? 0 : FS_RELOAD_DEBOUNCE
       reloadTimer = window.setTimeout(() => {
         reloadTimer = null
+        firstFsChangeAt = null
         reload()
-      }, 250)
+      }, delay)
     })
   })
 
