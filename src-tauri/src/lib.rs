@@ -1,5 +1,6 @@
 mod archive;
 mod fs_ops;
+mod instance;
 mod search;
 mod store;
 mod transfer;
@@ -57,6 +58,13 @@ fn overlay_hotkey(app: tauri::AppHandle) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // 二重起動を防ぐ。窓もホットキーも作る前に判定する。
+  // 2つ目の起動は、既存の窓を前面に出す操作として扱って終了する。
+  let instance = match instance::acquire() {
+    instance::Acquire::Second => return,
+    instance::Acquire::First(guard) => guard,
+  };
+
   tauri::Builder::default()
     .manage(windows::Registry::default())
     .manage(store::Store::default())
@@ -65,9 +73,14 @@ pub fn run() {
     .manage(search::Searches::default())
     .manage(transfer::Transfers::default())
     .manage(undo::UndoStack::default())
-    .setup(|app| {
+    .setup(move |app| {
       // お気に入りと履歴をディスクから復元する。
       app.state::<store::Store>().attach(app.handle());
+
+      if let Some(guard) = instance {
+        let handle = app.handle().clone();
+        instance::serve(guard, move || windows::focus_most_recent_window(&handle));
+      }
 
       if cfg!(debug_assertions) {
         app.handle().plugin(
