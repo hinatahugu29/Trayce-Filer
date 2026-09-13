@@ -5,11 +5,21 @@ use tauri::{AppHandle, Manager};
 
 /// 履歴の保持件数。多すぎると探すのに探す羽目になるので、この辺で頭打ちにする。
 const HISTORY_CAP: usize = 200;
+const SEARCH_HISTORY_CAP: usize = 15;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
   pub path: String,
   /// 最後に訪れた時刻(ms)。
+  pub at: u128,
+}
+
+/// A searched set of roots. Kept separately from directory navigation history because
+/// revisiting a search target is a different workflow from reopening a folder.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchLocationEntry {
+  pub paths: Vec<String>,
   pub at: u128,
 }
 
@@ -146,6 +156,8 @@ pub struct State {
   #[serde(default)]
   pub history: Vec<HistoryEntry>,
   #[serde(default)]
+  pub search_locations: Vec<SearchLocationEntry>,
+  #[serde(default)]
   pub settings: Settings,
   #[serde(default)]
   pub last_session: Option<SessionState>,
@@ -175,6 +187,33 @@ pub fn push_history(history: &mut Vec<HistoryEntry>, path: &str, at: u128) {
   history.retain(|e| e.path != path);
   history.insert(0, HistoryEntry { path: path.to_string(), at });
   history.truncate(HISTORY_CAP);
+}
+
+fn search_location_key(paths: &[String]) -> Vec<String> {
+  paths
+    .iter()
+    .map(|path| path.trim().trim_end_matches(['\\', '/']).to_lowercase())
+    .filter(|path| !path.is_empty())
+    .collect()
+}
+
+pub fn push_search_location(
+  history: &mut Vec<SearchLocationEntry>,
+  paths: Vec<String>,
+  at: u128,
+) {
+  let paths: Vec<String> = paths
+    .into_iter()
+    .map(|path| path.trim().to_string())
+    .filter(|path| !path.is_empty())
+    .collect();
+  if paths.is_empty() {
+    return;
+  }
+  let key = search_location_key(&paths);
+  history.retain(|entry| search_location_key(&entry.paths) != key);
+  history.insert(0, SearchLocationEntry { paths, at });
+  history.truncate(SEARCH_HISTORY_CAP);
 }
 
 /// 登録されていなければ足し、されていれば外す。戻り値は操作後に登録されているか。
@@ -285,6 +324,31 @@ pub fn clear_history(app: AppHandle) {
   app.state::<Store>().with(|s| s.history.clear());
 }
 
+#[tauri::command]
+pub fn list_search_locations(app: AppHandle) -> Vec<SearchLocationEntry> {
+  app.state::<Store>().state.lock().unwrap().search_locations.clone()
+}
+
+#[tauri::command]
+pub fn record_search_location(app: AppHandle, paths: Vec<String>) {
+  app
+    .state::<Store>()
+    .with(|state| push_search_location(&mut state.search_locations, paths, now_ms()));
+}
+
+#[tauri::command]
+pub fn remove_search_location(app: AppHandle, paths: Vec<String>) {
+  let key = search_location_key(&paths);
+  app
+    .state::<Store>()
+    .with(|state| state.search_locations.retain(|entry| search_location_key(&entry.paths) != key));
+}
+
+#[tauri::command]
+pub fn clear_search_locations(app: AppHandle) {
+  app.state::<Store>().with(|state| state.search_locations.clear());
+}
+
 /// 保存されている場所がまだ存在するか。消えたフォルダを一覧で灰色にするのに使う。
 #[tauri::command]
 pub fn paths_exist(paths: Vec<String>) -> Vec<bool> {
@@ -359,6 +423,31 @@ mod tests {
     }
     assert_eq!(h.len(), HISTORY_CAP);
     assert_eq!(h[0].path, format!("C:\\{}", HISTORY_CAP + 49), "最新が残る");
+  }
+
+  #[test]
+  fn search_location_history_is_separate_deduplicated_and_capped() {
+    let mut history = Vec::new();
+    push_search_location(&mut history, vec![r"C:\Work\".into()], 1);
+    push_search_location(&mut history, vec![r"c:\work".into()], 2);
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].paths, [r"c:\work"]);
+    assert_eq!(history[0].at, 2);
+
+    for index in 0..20 {
+      push_search_location(&mut history, vec![format!(r"D:\scope-{index}")], index);
+    }
+    assert_eq!(history.len(), SEARCH_HISTORY_CAP);
+    assert_eq!(history[0].paths, [r"D:\scope-19"]);
+  }
+
+  #[test]
+  fn search_location_history_preserves_multiple_roots() {
+    let mut history = Vec::new();
+    push_search_location(&mut history, vec![r"C:\one".into(), r"D:\two".into()], 1);
+    assert_eq!(history[0].paths, [r"C:\one", r"D:\two"]);
+    push_search_location(&mut history, vec!["  ".into()], 2);
+    assert_eq!(history.len(), 1);
   }
 
   #[test]

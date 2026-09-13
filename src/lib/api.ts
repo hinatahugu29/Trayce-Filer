@@ -61,6 +61,11 @@ export const reorderFavorite = (from: number, to: number) =>
 export const listHistory = () => invoke<HistoryEntry[]>('list_history')
 export const recordHistory = (path: string) => invoke<void>('record_history', { path })
 export const clearHistory = () => invoke<void>('clear_history')
+export type SearchLocationEntry = { paths: string[]; at: number }
+export const listSearchLocations = () => invoke<SearchLocationEntry[]>('list_search_locations')
+export const recordSearchLocation = (paths: string[]) => invoke<void>('record_search_location', { paths })
+export const removeSearchLocation = (paths: string[]) => invoke<void>('remove_search_location', { paths })
+export const clearSearchLocations = () => invoke<void>('clear_search_locations')
 
 /** 保存されている場所がまだ存在するか。消えたフォルダを灰色にするのに使う。 */
 export const pathsExist = (paths: string[]) => invoke<boolean[]>('paths_exist', { paths })
