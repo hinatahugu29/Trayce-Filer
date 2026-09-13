@@ -143,10 +143,13 @@
 </header>
 
 <style>
+  /* 狭いペイン（分割時など）では、操作ボタンの列を下の段へ回す。
+     同じ段に詰めると、ボタンの幅だけでパスの欄が潰れ、パンくずが1段1要素に折り返していた。 */
   header {
     display: flex;
+    flex-wrap: wrap;
     align-items: stretch;
-    gap: 12px;
+    column-gap: 12px;
     background: #202020;
     border-bottom: 1px solid #383838;
     flex: none;
@@ -159,8 +162,9 @@
     background: hsl(var(--hue) 70% 55%);
   }
 
+  /* パスの欄はこの幅を確保できない時、ボタンの列を折り返させる。 */
   .text {
-    flex: 1;
+    flex: 1 1 240px;
     min-width: 0;
     padding: 8px 4px 10px 6px;
     position: relative;

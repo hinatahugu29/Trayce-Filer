@@ -1159,10 +1159,13 @@
     box-shadow: inset 0 2px 0 0 #63cfad, inset 0 0 0 1px rgba(99, 207, 173, 0.22);
   }
 
+  /* 下の段へ回った時は右寄せで並べ、それでも入らなければさらに折り返す。 */
   .actions {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 4px;
-    margin: 10px 8px 0 0;
+    margin: 10px 8px 8px auto;
   }
   .actions button {
     width: 24px;
@@ -1240,7 +1243,10 @@
     color: #7fb0e8;
   }
 
+  /* FileList の列の畳み方（@container）の基準。検索ペインと同じく、ここを幅の容器にする。
+     指定が無いと規則が効かず、狭いペインで固定幅の列に押されて名前の列が消えていた。 */
   .list-slot {
+    container-type: inline-size;
     position: relative;
     display: flex;
     flex-direction: column;
