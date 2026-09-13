@@ -246,6 +246,8 @@ export const SEARCH_DONE = 'search-done'
 export const startSearch = (id: string, roots: string[]) => invoke<void>('start_search', { id, roots })
 export const filterSearch = (id: string, requestId: number, options: SearchFilterOptions) =>
   invoke<void>('filter_search', { id, requestId, options })
+/** 表示中の結果が実在するか確かめ直す。移動・削除された項目は結果から消える。 */
+export const recheckSearch = (id: string) => invoke<void>('recheck_search', { id })
 export const cancelSearch = (id: string) => invoke<void>('cancel_search', { id })
 export const pauseSearch = (id: string) => invoke<void>('pause_search', { id })
 export const resumeSearch = (id: string) => invoke<void>('resume_search', { id })

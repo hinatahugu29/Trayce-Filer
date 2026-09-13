@@ -156,6 +156,7 @@ pub fn run() {
       transfer::cancel_transfer,
       search::start_search,
       search::filter_search,
+      search::recheck_search,
       search::cancel_search,
       search::pause_search,
       search::resume_search,
