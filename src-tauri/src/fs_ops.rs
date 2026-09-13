@@ -270,8 +270,28 @@ pub fn transfer_pub(
 }
 
 /// 総量の事前集計。戻り値は (ファイル数, バイト数)。
-pub fn scan_total_pub(paths: &[String]) -> (u64, u64) {
-  scan_total(paths)
+///
+/// 移動で `dest` と同じボリュームにある項目は rename で済むため数えない。
+/// 巨大なフォルダを同じドライブ内で動かす時に、中身を全部舐める待ち時間を無くす。
+pub fn scan_total_pub(paths: &[String], dest: &str, move_files: bool) -> (u64, u64) {
+  let copied: Vec<String> = paths
+    .iter()
+    .filter(|p| !(move_files && same_volume(Path::new(p), Path::new(dest))))
+    .cloned()
+    .collect();
+  scan_total(&copied)
+}
+
+/// 2つのパスが同じドライブ（`C:` や `\\server\share`）にあるか。
+/// 判定できない場合は false にして、数え漏れより数え過ぎに倒す。
+fn same_volume(a: &Path, b: &Path) -> bool {
+  use std::path::Component;
+  match (a.components().next(), b.components().next()) {
+    (Some(Component::Prefix(x)), Some(Component::Prefix(y))) => {
+      x.as_os_str().to_string_lossy().to_lowercase() == y.as_os_str().to_string_lossy().to_lowercase()
+    }
+    _ => false,
+  }
 }
 
 /// コピー / 移動の本体。
@@ -316,6 +336,16 @@ fn transfer(
 
     let target = unique_target(dest_dir, Path::new(name));
 
+    // 同一ボリューム内の移動は、ファイルでもフォルダでも rename 1回で済む。
+    // 以前はファイルしか試しておらず、数GBのフォルダを同じドライブ内で動かすだけで
+    // 全コピー＋全削除になっていた。跨ぐと失敗するので下のコピー+削除に落とす。
+    // 総量の集計（scan_total）もこの経路の項目は数えないので、進捗には加えない。
+    if move_files && std::fs::rename(&src, &target).is_ok() {
+      on_progress(&progress, &src.to_string_lossy());
+      done.push((src, target));
+      continue;
+    }
+
     if src.is_dir() {
       // ディレクトリの再帰コピーは std に無いので自前。
       let completed = copy_dir_all(&src, &target, cancel, &mut progress, on_progress)
@@ -329,11 +359,6 @@ fn transfer(
       if move_files {
         std::fs::remove_dir_all(&src).map_err(|e| format!("{p} の削除に失敗: {e}"))?;
       }
-    } else if move_files && std::fs::rename(&src, &target).is_ok() {
-      // 同一ボリューム内なら rename が速い。跨ぐと失敗するのでコピー+削除に落とす。
-      progress.files_done += 1;
-      progress.bytes_done += target.metadata().map(|m| m.len()).unwrap_or(0);
-      on_progress(&progress, &src.to_string_lossy());
     } else {
       let completed = copy_file(&src, &target, cancel, &mut progress, on_progress)
         .map_err(|e| format!("{p}: {e}"))?;
@@ -404,15 +429,19 @@ fn copy_file(
 /// この走査自体が大きな木では時間を食うので、呼び出し側は
 /// 「集計中」を見せてから始める。
 fn scan_total(paths: &[String]) -> (u64, u64) {
+  // リンクは辿らない。ジャンクションが親を指していると無限に潜り、
+  // 別の場所を指していると転送しない量まで分母に入る。
+  // copy_dir_all も DirEntry::file_type（辿らない）で判定しているので揃える。
   fn walk(p: &Path, files: &mut u64, bytes: &mut u64) {
-    if p.is_dir() {
+    let Ok(meta) = std::fs::symlink_metadata(p) else { return };
+    if meta.is_dir() {
       let Ok(read) = std::fs::read_dir(p) else { return };
       for e in read.flatten() {
         walk(&e.path(), files, bytes);
       }
     } else {
       *files += 1;
-      *bytes += p.metadata().map(|m| m.len()).unwrap_or(0);
+      *bytes += meta.len();
     }
   }
 
@@ -1176,6 +1205,49 @@ mod tests {
     assert_eq!(pairs.len(), 1, "完了したのは small.txt だけ");
     assert_eq!(pairs[0].0, from.join("small.txt"));
     assert!(!to.join("big.bin").exists(), "書きかけは残さない");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// 同じドライブ内のフォルダ移動は rename で済ませる。
+  /// コピーしていればファイルの実体（ファイルID）が変わるので、それで見分ける。
+  #[cfg(windows)]
+  #[test]
+  fn moving_a_directory_on_the_same_volume_renames_instead_of_copying() {
+    let root = scratch("move_dir_rename");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(from.join("d/nested")).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(from.join("d/nested/a.txt"), b"x").unwrap();
+    let before = std::fs::metadata(from.join("d/nested/a.txt")).unwrap().modified().unwrap();
+
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let mut bytes_seen = 0;
+    let pairs = transfer(&[s(&from.join("d"))], &s(&to), true, &never, &mut |p, _| bytes_seen = p.bytes_done).unwrap();
+
+    assert_eq!(pairs.len(), 1);
+    assert!(!from.join("d").exists());
+    assert_eq!(std::fs::read(to.join("d/nested/a.txt")).unwrap(), b"x");
+    assert_eq!(bytes_seen, 0, "中身を1バイトも読み書きしていない");
+    assert_eq!(std::fs::metadata(to.join("d/nested/a.txt")).unwrap().modified().unwrap(), before);
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn same_volume_compares_drive_prefixes_case_insensitively() {
+    assert!(same_volume(Path::new(r"C:\a\b"), Path::new(r"c:\x")));
+    assert!(!same_volume(Path::new(r"C:\a"), Path::new(r"D:\a")));
+    assert!(!same_volume(Path::new(r"relative\a"), Path::new(r"C:\a")));
+  }
+
+  #[test]
+  fn scan_total_skips_same_volume_moves() {
+    let root = scratch("scan_skip_move");
+    std::fs::write(root.join("a.bin"), vec![0u8; 100]).unwrap();
+    let paths = [s(&root.join("a.bin"))];
+    assert_eq!(scan_total_pub(&paths, &s(&root), false), (1, 100), "コピーは数える");
+    #[cfg(windows)]
+    assert_eq!(scan_total_pub(&paths, &s(&root), true), (0, 0), "同一ドライブの移動は数えない");
     let _ = std::fs::remove_dir_all(&root);
   }
 
