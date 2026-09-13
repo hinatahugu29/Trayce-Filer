@@ -55,6 +55,7 @@ export type WindowPaneInfo = {
   query: string
   is_active: boolean
 }
+export type WindowTabInfo = { id: number; label: string; is_active: boolean }
 export type WindowInfo = {
   label: string
   path: string
@@ -63,6 +64,7 @@ export type WindowInfo = {
   active_tab_label: string
   tab_count: number
   panes: WindowPaneInfo[]
+  tabs: WindowTabInfo[]
 }
 export type HistoryEntry = { path: string; at: number }
 
@@ -312,7 +314,8 @@ export const setWindowContext = (
   activeTabLabel: string,
   tabCount: number,
   panes: WindowPaneInfo[],
-) => invoke<void>('set_window_context', { label, activeTabLabel, tabCount, panes })
+  tabs: WindowTabInfo[],
+) => invoke<void>('set_window_context', { label, activeTabLabel, tabCount, panes, tabs })
 export const setWindowTray = (label: string, paths: string[]) =>
   invoke<void>('set_window_tray', { label, paths })
 export const WINDOW_TRAY_CHANGED = 'window-tray-changed'

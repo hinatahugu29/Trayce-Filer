@@ -100,7 +100,12 @@
       query: pane.kind === 'search' ? pane.search?.query ?? '' : '',
       is_active: pane.id === tab.activeId,
     }))
-    api.setWindowContext(label, tabLabel(tab), tabs.length, panes).catch(() => {})
+    const windowTabs: api.WindowTabInfo[] = tabs.map((candidate) => ({
+      id: candidate.id,
+      label: tabLabel(candidate),
+      is_active: candidate.id === activeTabId,
+    }))
+    api.setWindowContext(label, tabLabel(tab), tabs.length, panes, windowTabs).catch(() => {})
   }
 
   function newTab(path: string) {

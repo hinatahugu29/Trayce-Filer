@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 pub const OVERLAY_LABEL: &str = "overlay";
 pub const WINDOW_TRAY_CHANGED: &str = "window-tray-changed";
 pub const ACTIVATE_PANE_REQUEST: &str = "activate-pane-request";
+pub const ACTIVATE_TAB_REQUEST: &str = "activate-tab-request";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +30,7 @@ pub struct WindowInfo {
   pub active_tab_label: String,
   pub tab_count: usize,
   pub panes: Vec<WindowPaneInfo>,
+  pub tabs: Vec<WindowTabInfo>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +40,13 @@ pub struct WindowPaneInfo {
   pub path: String,
   #[serde(default)]
   pub query: String,
+  pub is_active: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowTabInfo {
+  pub id: u32,
+  pub label: String,
   pub is_active: bool,
 }
 
@@ -74,6 +83,7 @@ impl Registry {
           query: String::new(),
           is_active: true,
         }],
+        tabs: vec![WindowTabInfo { id: 0, label: path.to_string(), is_active: true }],
       },
     );
   }
@@ -88,6 +98,7 @@ impl Registry {
     active_tab_label: String,
     tab_count: usize,
     panes: Vec<WindowPaneInfo>,
+    tabs: Vec<WindowTabInfo>,
   ) -> Option<String> {
     let active_path = panes
       .iter()
@@ -98,6 +109,7 @@ impl Registry {
       info.active_tab_label = active_tab_label;
       info.tab_count = tab_count;
       info.panes = panes;
+      info.tabs = tabs;
       if let Some(path) = &active_path {
         info.path = path.clone();
       }
@@ -197,10 +209,11 @@ pub fn set_window_context(
   active_tab_label: String,
   tab_count: usize,
   panes: Vec<WindowPaneInfo>,
+  tabs: Vec<WindowTabInfo>,
 ) {
   let active_path = app
     .state::<Registry>()
-    .set_context(&label, active_tab_label, tab_count, panes);
+    .set_context(&label, active_tab_label, tab_count, panes, tabs);
   if let (Some(win), Some(path)) = (app.get_webview_window(&label), active_path) {
     let _ = win.set_title(&path);
   }
@@ -437,7 +450,16 @@ mod tests {
       },
     ];
     assert_eq!(
-      reg.set_context("filer-1", "Assets".into(), 3, panes.clone()),
+      reg.set_context(
+        "filer-1",
+        "Assets".into(),
+        3,
+        panes.clone(),
+        vec![
+          WindowTabInfo { id: 1, label: "Home".into(), is_active: false },
+          WindowTabInfo { id: 2, label: "Assets".into(), is_active: true },
+        ],
+      ),
       Some(r"D:\assets".into())
     );
     let info = reg.sorted().pop().unwrap();
@@ -445,5 +467,7 @@ mod tests {
     assert_eq!(info.active_tab_label, "Assets");
     assert_eq!(info.tab_count, 3);
     assert_eq!(info.panes, panes);
+    assert_eq!(info.tabs.len(), 2);
+    assert_eq!(info.tabs[1].label, "Assets");
   }
 }
