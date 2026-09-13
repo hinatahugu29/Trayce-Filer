@@ -37,17 +37,21 @@
   let draggingItem: {
     paths: string[]
     srcWindowLabel: string
+    srcPaneId?: number
+    sourceDir?: string
     name: string
     fromTray: boolean
   } | null = null
-  let dropTargetLabel: string | null = null
+  let dropTargetKey: string | null = null
   let isCopyMode = false
   let progress: api.ProgressEvent | null = null
   let activeTransfer: {
     id: number
     srcWindowLabel: string
     targetLabel: string
+    targetPaneId: number
     targetDir: string
+    sourceDir?: string
     name: string
     moveFiles: boolean
     fromTray: boolean
@@ -137,6 +141,7 @@
   function handleDragStart(
     entry: Entry,
     win: WindowInfo,
+    pane: WindowPaneInfo,
     parentPath: string,
     ev: DragEvent
   ) {
@@ -145,6 +150,8 @@
     draggingItem = {
       paths: [fullPath],
       srcWindowLabel: win.label,
+      srcPaneId: pane.id,
+      sourceDir: parentPath,
       name: entry.name,
       fromTray: false,
     }
@@ -172,46 +179,67 @@
 
   function handleDragEnd() {
     draggingItem = null
-    dropTargetLabel = null
+    dropTargetKey = null
+  }
+
+  function paneKey(win: WindowInfo, pane: WindowPaneInfo): string {
+    return `${win.label}:${pane.id}`
+  }
+
+  function canDropOn(win: WindowInfo, pane: WindowPaneInfo): boolean {
+    if (activeTransfer || pane.kind !== 'directory' || !draggingItem) return false
+    return draggingItem.fromTray
+      || draggingItem.srcWindowLabel !== win.label
+      || draggingItem.srcPaneId !== pane.id
+  }
+
+  function handlePaneDragOver(win: WindowInfo, pane: WindowPaneInfo, ev: DragEvent) {
+    ev.preventDefault()
+    ev.stopPropagation()
+    if (!canDropOn(win, pane)) {
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'none'
+      return
+    }
+    isCopyMode = draggingItem?.fromTray ? !ev.shiftKey : ev.ctrlKey
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = isCopyMode ? 'copy' : 'move'
+    dropTargetKey = paneKey(win, pane)
   }
 
   function handleCardDragOver(win: WindowInfo, ev: DragEvent) {
-    ev.preventDefault()
-    if (activeTransfer) {
-      if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'none'
-      return
-    }
-    if (!draggingItem || (!draggingItem.fromTray && draggingItem.srcWindowLabel === win.label)) {
-      if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'none'
-      return
-    }
-    isCopyMode = draggingItem.fromTray ? !ev.shiftKey : ev.ctrlKey
-    if (ev.dataTransfer) {
-      ev.dataTransfer.dropEffect = isCopyMode ? 'copy' : 'move'
-    }
-    dropTargetLabel = win.label
+    const pane = selectedPane(win)
+    if (!pane) return
+    handlePaneDragOver(win, pane, ev)
   }
 
   function handleCardDragLeave(win: WindowInfo, _ev: DragEvent) {
-    if (dropTargetLabel === win.label) {
-      dropTargetLabel = null
-    }
+    if (dropTargetKey?.startsWith(`${win.label}:`)) dropTargetKey = null
   }
 
   // カードへのドロップ（ファイル移動・コピー実行）
   async function handleCardDrop(win: WindowInfo, ev: DragEvent) {
+    const pane = selectedPane(win)
+    if (!pane) return
+    await handlePaneDrop(win, pane, ev)
+  }
+
+  async function handlePaneDrop(win: WindowInfo, pane: WindowPaneInfo, ev: DragEvent) {
     ev.preventDefault()
-    dropTargetLabel = null
+    ev.stopPropagation()
+    dropTargetKey = null
     if (activeTransfer) {
       onNote('転送中です。完了または中断後にもう一度操作してください')
       return
     }
-    if (!draggingItem || (!draggingItem.fromTray && draggingItem.srcWindowLabel === win.label)) return
-
     const dragged = draggingItem
+    if (!dragged) return
+    if (!canDropOn(win, pane)) {
+      if (pane.kind === 'search') onNote('検索ペインは転送先にはできません')
+      return
+    }
+
     const srcPaths = dragged.paths
     const srcWindowLabel = dragged.srcWindowLabel
-    const targetDir = win.path
+    const targetDir = pane.path
     // 通常項目は従来どおり Ctrl でコピー。収集トレイは安全側のコピーを既定にし、Shift で移動。
     const moveFiles = dragged.fromTray ? ev.shiftKey : !ev.ctrlKey
 
@@ -224,7 +252,9 @@
         id,
         srcWindowLabel,
         targetLabel: win.label,
+        targetPaneId: pane.id,
         targetDir,
+        sourceDir: dragged.sourceDir,
         name: dragged.name,
         moveFiles,
         fromTray: dragged.fromTray,
@@ -264,8 +294,7 @@
       windows = windows
     }
 
-    const source = windows.find((w) => w.label === job.srcWindowLabel)
-    if (source) await refreshDir(source.path)
+    if (job.sourceDir) await refreshDir(job.sourceDir)
     await refreshDir(job.targetDir)
 
     if (error) onNote(`転送に失敗: ${error}`)
@@ -312,7 +341,7 @@
       {@const displayPath = selected?.path ?? w.path}
       {@const parts = splitPath(displayPath)}
       {@const cache = selected?.kind === 'directory' ? dirCache[displayPath] : undefined}
-      {@const isDropTarget = dropTargetLabel === w.label}
+      {@const isDropTarget = dropTargetKey?.startsWith(`${w.label}:`) ?? false}
       <div
         class="card"
         class:drop-target={isDropTarget}
@@ -372,8 +401,15 @@
               class:selected={pane.id === selected?.id}
               class:active-pane={pane.is_active}
               class:search-pane={pane.kind === 'search'}
+              class:drop-target={dropTargetKey === paneKey(w, pane)}
+              class:transferring={activeTransfer?.targetLabel === w.label && activeTransfer?.targetPaneId === pane.id}
               title={pane.path}
               on:click|stopPropagation={() => choosePane(w, pane)}
+              on:dragover={(event) => handlePaneDragOver(w, pane, event)}
+              on:dragleave|stopPropagation={() => {
+                if (dropTargetKey === paneKey(w, pane)) dropTargetKey = null
+              }}
+              on:drop={(event) => handlePaneDrop(w, pane, event)}
             >
               <span>{pane.kind === 'search' ? '⌕' : '▣'} {paneIndex + 1}</span>
               <strong>{pane.kind === 'search' && pane.query ? pane.query : paneParts.tail || pane.path}</strong>
@@ -417,7 +453,7 @@
                   class="file-item"
                   class:is-dir={entry.is_dir}
                   draggable="true"
-                  on:dragstart={(e) => handleDragStart(entry, w, displayPath, e)}
+                  on:dragstart={(e) => selected && handleDragStart(entry, w, selected, displayPath, e)}
                   on:dragend={handleDragEnd}
                   title="{entry.name} ({entry.is_dir ? 'フォルダ' : formatSize(entry.size)})"
                   role="presentation"
@@ -596,7 +632,7 @@
 
   .drop-banner {
     position: absolute;
-    top: 48px;
+    top: 96px;
     left: 0;
     right: 0;
     bottom: 0;
@@ -670,6 +706,8 @@
   .pane-map button.selected { border-color: #4c9aff; background: #26384d; color: #8fc1f5; }
   .pane-map button.active-pane { box-shadow: inset 2px 0 0 #63cfad; }
   .pane-map button.search-pane { border-style: dashed; }
+  .pane-map button.drop-target { border-color: #60a5fa; background: #173f68; box-shadow: 0 0 10px rgba(59, 130, 246, .45); }
+  .pane-map button.transferring { border-color: #63cfad; }
   .pane-map span { grid-row: 1 / 3; align-self: center; font-size: 10px; }
   .pane-map strong, .pane-map small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pane-map strong { color: #d5d9dd; font-size: 10px; font-weight: 600; }
