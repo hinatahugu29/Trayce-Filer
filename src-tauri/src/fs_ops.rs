@@ -844,20 +844,11 @@ pub fn trash_entries(app: tauri::AppHandle, paths: Vec<String>) -> Result<usize,
 
   let n = trash_entries_impl(&paths)?;
 
-  // 削除直後の一覧から、今送ったものを拾って undo 用に持っておく。
-  // original_path で突き合わせる。
-  if let Ok(all) = trash::os_limited::list() {
-    let wanted: std::collections::HashSet<PathBuf> = paths.iter().map(PathBuf::from).collect();
-    let mut items: Vec<trash::TrashItem> =
-      all.into_iter().filter(|i| wanted.contains(&i.original_path())).collect();
-    // 同じ場所が複数回ゴミ箱に入っている場合、直近に消した時刻のものを選ぶ。
-    items.sort_by_key(|i| std::cmp::Reverse(i.time_deleted));
-    let mut seen = std::collections::HashSet::new();
-    items.retain(|i| seen.insert(i.original_path()));
-
-    if !items.is_empty() {
-      app.state::<crate::undo::UndoStack>().push(crate::undo::UndoAction::Trash { items });
-    }
+  // 元の場所だけを覚えておく。ゴミ箱の全件列挙は重いので、実際に取り消す時まで遅らせる。
+  if n > 0 {
+    app.state::<crate::undo::UndoStack>().push(crate::undo::UndoAction::Trash {
+      paths: paths.iter().map(PathBuf::from).collect(),
+    });
   }
 
   Ok(n)

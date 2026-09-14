@@ -19,8 +19,8 @@ pub enum UndoAction {
   CreateFolder { path: PathBuf },
   /// 空ファイルを削除して取り消す。書き込まれていたら安全のため諦める。
   CreateFile { path: PathBuf },
-  /// ゴミ箱から元の場所へ復元する。
-  Trash { items: Vec<trash::TrashItem> },
+  /// ゴミ箱から元の場所へ復元する。送った時の元の場所で持ち、取り消す時にゴミ箱から探す。
+  Trash { paths: Vec<PathBuf> },
   /// コピー/移動で作られたものを取り消す。
   Transfer {
     /// (元のパス, 作られたパス) の対応。移動なら created を from へ戻す。
@@ -43,11 +43,11 @@ impl UndoAction {
       UndoAction::BatchRename { pairs } => format!("一括名前変更（{}件）", pairs.len()),
       UndoAction::CreateFolder { path } => format!("フォルダー作成「{}」", name_of(path)),
       UndoAction::CreateFile { path } => format!("ファイル作成「{}」", name_of(path)),
-      UndoAction::Trash { items } => {
-        if items.len() == 1 {
-          format!("ゴミ箱へ移動「{}」", items[0].name.to_string_lossy())
+      UndoAction::Trash { paths } => {
+        if paths.len() == 1 {
+          format!("ゴミ箱へ移動「{}」", name_of(&paths[0]))
         } else {
-          format!("ゴミ箱へ移動（{}件）", items.len())
+          format!("ゴミ箱へ移動（{}件）", paths.len())
         }
       }
       UndoAction::Transfer { pairs, was_move, replaced } => {
@@ -164,8 +164,8 @@ fn apply_undo(action: UndoAction) -> Result<(), String> {
       }
     }
 
-    UndoAction::Trash { items } => {
-      trash::os_limited::restore_all(items).map_err(|e| format!("復元できません: {e}"))?;
+    UndoAction::Trash { paths } => {
+      restore_from_trash(&paths, "")?;
     }
 
     UndoAction::Transfer { pairs, was_move, replaced } => {
@@ -212,16 +212,16 @@ fn apply_undo(action: UndoAction) -> Result<(), String> {
       }
       // 新しい方を退かした後で、上書き前の既存項目を元の場所へ戻す。
       if !replaced.is_empty() {
-        restore_replaced(&replaced)?;
+        restore_from_trash(&replaced, "上書き前の")?;
       }
     }
   }
   Ok(())
 }
 
-/// 上書きでゴミ箱へ送った項目を、元の場所へ戻す。
+/// ゴミ箱へ送った項目を、元の場所へ戻す。`what` はメッセージで項目を言い表す前置き。
 /// 同じ場所が何度もゴミ箱に入っていることがあるので、それぞれ最も新しく消したものを選ぶ。
-fn restore_replaced(replaced: &[PathBuf]) -> Result<(), String> {
+fn restore_from_trash(replaced: &[PathBuf], what: &str) -> Result<(), String> {
   let wanted: std::collections::HashSet<&PathBuf> = replaced.iter().collect();
   let mut items: Vec<trash::TrashItem> = trash::os_limited::list()
     .map_err(|e| format!("ゴミ箱を読めません: {e}"))?
@@ -234,10 +234,10 @@ fn restore_replaced(replaced: &[PathBuf]) -> Result<(), String> {
 
   let missing = replaced.len() - items.len();
   if !items.is_empty() {
-    trash::os_limited::restore_all(items).map_err(|e| format!("上書き前の項目を復元できません: {e}"))?;
+    trash::os_limited::restore_all(items).map_err(|e| format!("{what}項目を復元できません: {e}"))?;
   }
   if missing > 0 {
-    return Err(format!("上書き前の項目のうち {missing}件はゴミ箱に見つかりませんでした（既に空にした可能性があります）"));
+    return Err(format!("{what}項目のうち {missing}件はゴミ箱に見つかりませんでした（既に空にした可能性があります）"));
   }
   Ok(())
 }
