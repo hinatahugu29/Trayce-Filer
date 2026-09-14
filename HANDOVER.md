@@ -51,7 +51,9 @@ results available as normal copy/move/preview/tray sources.
 - [x] Hardening and feature round — shared normalization fixture, Windows CI, overwrite undo, skip-aware totals, dev/release instance separation, shared collision prompt, removal of unused sync commands, search attribute filters, search folder exclusions, pane pinning, bulk rename, transfer queue (with early-event race fix), on-demand folder size, named trays
 - [x] GUI verification (release build, automated) — collision skip and keep-both, bulk rename preview/apply/undo, search attribute filters and folder exclusions, pinned-pane redirection, session restore of a directory plus search pane; found and fixed the narrow-pane layout (`9d7293f`)
 - [ ] GUI follow-up — not exercised automatically: overwrite followed by Ctrl+Z (would touch the real Recycle Bin), queued transfers (fixture copies finish too fast to overlap), named tray add/rename (native prompt dialogs)
-- [ ] Review follow-up — make trash undo lookup cheaper (`trash::os_limited::list()` enumerates the whole recycle bin on every delete)
+- [x] Review follow-up — make trash undo lookup cheaper (deletes now record original paths; the recycle bin is enumerated only when undo runs)
+- [x] Everyday-use round — opener scope fix, Alt+D, new text file, open terminal here, confirmation before running executables, ZIP off the UI thread, Explorer clipboard interop, open with / properties / native shell menu, file-type icons, Trayce product naming
+- [ ] Everyday-use follow-up — not exercised in the running app: Explorer clipboard round trips, native shell menu (submenus such as Send To may be empty because IContextMenu2/3 messages are not forwarded), properties dialog, Alt+D
 - [ ] Review follow-up — reduce per-entry search cache memory (four owned strings per entry) if multi-million-entry roots become common
 - [ ] Review follow-up — split `fs_ops.rs` (listing / transfer / clipboard / preview) and continue the gradual `Pane.svelte` extraction
 
