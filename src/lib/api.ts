@@ -126,7 +126,11 @@ export function confirmLaunch(path: string): boolean {
   const name = path.split(/[\\/]/).pop() ?? path
   return !EXECUTABLE.test(name) || confirm(`${name} を実行しますか？`)
 }
-export const openTerminal =(path: string) => invoke<void>('open_terminal', { path })
+export const openWith = (path: string) => invoke<void>('open_with', { path })
+export const showProperties = (path: string) => invoke<void>('show_properties', { path })
+/** Windows 本来の右クリックメニューをマウス位置に出す。 */
+export const showShellMenu = (paths: string[]) => invoke<void>('show_shell_menu', { paths })
+export const openTerminal = (path: string) => invoke<void>('open_terminal', { path })
 export const renameEntry =(path: string, newName: string) =>
   invoke<string>('rename_entry', { path, newName })
 /**

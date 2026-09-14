@@ -325,7 +325,12 @@
         : { kind: 'item', label: '既定のアプリで開く', run: () => launch(entry, path) },
       // 結果を見つけた後は「その場所」で作業したいことが多い。検索ペインは残して隣に開く。
       { kind: 'item', label: '含まれるフォルダを隣に開く', disabled: !parent, run: () => onSplit(parent) },
+      ...(entry.is_dir
+        ? []
+        : ([{ kind: 'item', label: 'プログラムから開く…', run: () => api.openWith(path).catch((e) => onNote(String(e))) }] as MenuItem[])),
       { kind: 'item', label: 'エクスプローラーで表示', run: revealSelection },
+      { kind: 'item', label: 'その他のオプション（Windows）', run: () => api.showShellMenu([path]).catch((e) => onNote(String(e))) },
+      { kind: 'item', label: 'プロパティ', run: () => api.showProperties(path).catch((e) => onNote(String(e))) },
       { kind: 'sep' },
       { kind: 'item', label: 'コピー', hint: hint('copy'), run: () => copySelection(false) },
       { kind: 'item', label: '切り取り', hint: hint('cut'), run: () => copySelection(true) },

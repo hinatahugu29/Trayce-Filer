@@ -3,6 +3,7 @@ mod fs_ops;
 mod instance;
 mod rename;
 mod search;
+mod shell;
 mod store;
 mod transfer;
 mod undo;
@@ -144,6 +145,9 @@ pub fn run() {
       fs_ops::create_folder,
       fs_ops::create_file,
       fs_ops::open_terminal,
+      shell::open_with,
+      shell::show_properties,
+      shell::show_shell_menu,
       fs_ops::rename_entry,
       rename::plan_bulk_rename,
       rename::apply_bulk_rename,

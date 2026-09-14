@@ -660,7 +660,18 @@
               const full = api.joinPath(listing.path, entry.name)
               entry.is_dir ? open(full) : launch(entry, full)
             } },
+          ...(entry.is_dir
+            ? []
+            : ([{ kind: 'item', label: 'プログラムから開く…', run: () => {
+                if (listing) api.openWith(api.joinPath(listing.path, entry.name)).catch((e) => onNote(String(e)))
+              } }] as MenuItem[])),
           { kind: 'item', label: 'エクスプローラーで表示', run: revealSelection },
+          { kind: 'item', label: 'その他のオプション（Windows）', run: () => {
+              api.showShellMenu(selection).catch((e) => onNote(String(e)))
+            } },
+          { kind: 'item', label: 'プロパティ', disabled: n !== 1, run: () => {
+              if (one) api.showProperties(one).catch((e) => onNote(String(e)))
+            } },
           // フォルダを見つけた後に「この中から探す」へ一手で移る。元のペインは残す。
           ...(entry.is_dir
             ? ([
