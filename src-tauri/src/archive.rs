@@ -1,4 +1,4 @@
-use std::io::{Read, Seek, Write};
+use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
 /// 選択されたものを1つの ZIP にまとめる。
@@ -7,8 +7,16 @@ use std::path::{Path, PathBuf};
 /// - 1件だけならその名前 + `.zip`
 /// - 複数ならその親フォルダ名 + `.zip`
 /// 既存と衝突したら `name (2).zip` のように退避する（黙って上書きしない）。
+///
+/// 大きなファイルでも画面が固まらないよう、処理は別スレッドで行う。
 #[tauri::command]
-pub fn compress_to_zip(paths: Vec<String>) -> Result<String, String> {
+pub async fn compress_to_zip(paths: Vec<String>) -> Result<String, String> {
+  tauri::async_runtime::spawn_blocking(move || compress_to_zip_impl(paths))
+    .await
+    .map_err(|e| format!("圧縮が中断されました: {e}"))?
+}
+
+fn compress_to_zip_impl(paths: Vec<String>) -> Result<String, String> {
   if paths.is_empty() {
     return Err("圧縮するものが選ばれていません".into());
   }
@@ -46,8 +54,9 @@ pub fn compress_to_zip(paths: Vec<String>) -> Result<String, String> {
       add_dir(&mut zip, src, &name, options).map_err(|e| format!("{p}: {e}"))?;
     } else {
       zip.start_file(&name, options).map_err(|e| format!("{p}: {e}"))?;
-      let bytes = std::fs::read(src).map_err(|e| format!("{p}: {e}"))?;
-      zip.write_all(&bytes).map_err(|e| format!("{p}: {e}"))?;
+      // 丸ごとメモリに載せず、流し込む。数 GB のファイルでも使用量が増えない。
+      let mut file = std::fs::File::open(src).map_err(|e| format!("{p}: {e}"))?;
+      std::io::copy(&mut file, &mut zip).map_err(|e| format!("{p}: {e}"))?;
     }
   }
 
@@ -73,8 +82,8 @@ fn add_dir<W: Write + Seek>(
       add_dir(zip, &entry.path(), &inner, options)?;
     } else {
       zip.start_file(&inner, options)?;
-      let bytes = std::fs::read(entry.path())?;
-      zip.write_all(&bytes)?;
+      let mut file = std::fs::File::open(entry.path())?;
+      std::io::copy(&mut file, zip)?;
     }
   }
   Ok(())
@@ -82,7 +91,13 @@ fn add_dir<W: Write + Seek>(
 
 /// ZIP を同じ場所のフォルダへ展開する。戻り値は展開先フォルダ。
 #[tauri::command]
-pub fn extract_zip(path: String) -> Result<String, String> {
+pub async fn extract_zip(path: String) -> Result<String, String> {
+  tauri::async_runtime::spawn_blocking(move || extract_zip_impl(path))
+    .await
+    .map_err(|e| format!("展開が中断されました: {e}"))?
+}
+
+fn extract_zip_impl(path: String) -> Result<String, String> {
   let src = Path::new(&path);
   let parent = src.parent().ok_or("親ディレクトリを特定できません")?;
   let stem = src
@@ -114,9 +129,8 @@ pub fn extract_zip(path: String) -> Result<String, String> {
       std::fs::create_dir_all(p).map_err(|e| format!("{}: {e}", p.display()))?;
     }
 
-    let mut buf = Vec::new();
-    entry.read_to_end(&mut buf).map_err(|e| format!("読み取り失敗: {e}"))?;
-    std::fs::write(&out, buf).map_err(|e| format!("{}: {e}", out.display()))?;
+    let mut file = std::fs::File::create(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    std::io::copy(&mut entry, &mut file).map_err(|e| format!("読み取り失敗: {e}"))?;
   }
 
   Ok(dest.to_string_lossy().to_string())
@@ -169,11 +183,11 @@ mod tests {
     let root = scratch("roundtrip");
     std::fs::write(root.join("hello.txt"), b"contents").unwrap();
 
-    let zip_path = compress_to_zip(vec![s(&root.join("hello.txt"))]).unwrap();
+    let zip_path = compress_to_zip_impl(vec![s(&root.join("hello.txt"))]).unwrap();
     assert!(zip_path.ends_with("hello.zip"));
 
     // 展開してから中身が一致すること。
-    let out = extract_zip(zip_path).unwrap();
+    let out = extract_zip_impl(zip_path).unwrap();
     let restored = Path::new(&out).join("hello.txt");
     assert_eq!(std::fs::read(restored).unwrap(), b"contents");
     let _ = std::fs::remove_dir_all(&root);
@@ -186,8 +200,8 @@ mod tests {
     std::fs::write(root.join("src/a.txt"), b"a").unwrap();
     std::fs::write(root.join("src/nested/b.txt"), b"b").unwrap();
 
-    let zip_path = compress_to_zip(vec![s(&root.join("src"))]).unwrap();
-    let out = extract_zip(zip_path).unwrap();
+    let zip_path = compress_to_zip_impl(vec![s(&root.join("src"))]).unwrap();
+    let out = extract_zip_impl(zip_path).unwrap();
 
     assert_eq!(std::fs::read(Path::new(&out).join("src/a.txt")).unwrap(), b"a");
     assert_eq!(
@@ -204,7 +218,7 @@ mod tests {
     std::fs::write(root.join("data.txt"), b"x").unwrap();
     std::fs::write(root.join("data.zip"), b"existing archive").unwrap();
 
-    let created = compress_to_zip(vec![s(&root.join("data.txt"))]).unwrap();
+    let created = compress_to_zip_impl(vec![s(&root.join("data.txt"))]).unwrap();
 
     assert!(created.ends_with("data (2).zip"));
     assert_eq!(
@@ -219,11 +233,11 @@ mod tests {
   fn extract_does_not_collide_with_existing_folder() {
     let root = scratch("extract_collide");
     std::fs::write(root.join("pack.txt"), b"x").unwrap();
-    let zip_path = compress_to_zip(vec![s(&root.join("pack.txt"))]).unwrap();
+    let zip_path = compress_to_zip_impl(vec![s(&root.join("pack.txt"))]).unwrap();
     std::fs::create_dir_all(root.join("pack")).unwrap();
     std::fs::write(root.join("pack/keep.txt"), b"important").unwrap();
 
-    let out = extract_zip(zip_path).unwrap();
+    let out = extract_zip_impl(zip_path).unwrap();
 
     assert!(out.ends_with("pack (2)"), "既存フォルダを避けるべき");
     assert!(root.join("pack/keep.txt").exists(), "既存の中身は無事であるべき");
@@ -232,6 +246,6 @@ mod tests {
 
   #[test]
   fn compressing_nothing_is_an_error() {
-    assert!(compress_to_zip(vec![]).is_err());
+    assert!(compress_to_zip_impl(vec![]).is_err());
   }
 }
