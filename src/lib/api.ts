@@ -118,7 +118,16 @@ export const listDir = (path: string, sort?: SortSpec) => invoke<Listing>('list_
 
 export const createFolder = (parent: string, name: string) =>
   invoke<string>('create_folder', { parent, name })
-export const renameEntry = (path: string, newName: string) =>
+export const createFile = (parent: string, name: string) =>
+  invoke<string>('create_file', { parent, name })
+/** ダブルクリックでそのまま動いてしまう種類。開く前に一度だけ確かめる。 */
+const EXECUTABLE = /\.(exe|bat|cmd|com|msi|ps1|vbs|js|lnk|scr)$/i
+export function confirmLaunch(path: string): boolean {
+  const name = path.split(/[\\/]/).pop() ?? path
+  return !EXECUTABLE.test(name) || confirm(`${name} を実行しますか？`)
+}
+export const openTerminal =(path: string) => invoke<void>('open_terminal', { path })
+export const renameEntry =(path: string, newName: string) =>
   invoke<string>('rename_entry', { path, newName })
 /**
  * 一括名前変更の規則。拡張子は常にそのまま残る。

@@ -421,6 +421,7 @@
   }
 
   async function launch(_entry: Entry, path: string) {
+    if (!api.confirmLaunch(path)) return
     try {
       await openPath(path)
     } catch (e) {
@@ -501,6 +502,26 @@
       renaming = { path: created, value: created.split(/[\\/]/).pop() ?? '' }
     } catch (e) {
       error = String(e)
+    }
+  }
+
+  async function newFile() {
+    if (!listing) return
+    try {
+      const created = await api.createFile(listing.path, '新しいテキスト ドキュメント.txt')
+      await reload()
+      renaming = { path: created, value: created.split(/[\\/]/).pop() ?? '' }
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  async function openTerminalHere() {
+    if (!listing) return
+    try {
+      await api.openTerminal(listing.path)
+    } catch (e) {
+      onNote(String(e))
     }
   }
 
@@ -676,10 +697,12 @@
       : [
           // 空き領域＝「この場所」に対する操作。
           { kind: 'item', label: '新しいフォルダー', hint: hint('newFolder'), run: newFolder },
+          { kind: 'item', label: '新しいテキストファイル', run: newFile },
           { kind: 'item', label: '貼り付け', hint: hint('paste'), run: paste },
           { kind: 'sep' },
           { kind: 'item', label: 'このフォルダのパスをコピー', hint: hint('copyPath'), run: copyFullPaths },
           { kind: 'item', label: 'エクスプローラーで表示', run: revealSelection },
+          { kind: 'item', label: 'ここでターミナルを開く', run: openTerminalHere },
           { kind: 'item', label: 'このフォルダ内を検索', hint: hint('hoverSplitSearchPane'), run: () => {
               if (listing) onSplitSearch(listing.path)
             } },

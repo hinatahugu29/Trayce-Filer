@@ -142,6 +142,8 @@ pub fn run() {
       fs_ops::list_subdirs,
       fs_ops::drives,
       fs_ops::create_folder,
+      fs_ops::create_file,
+      fs_ops::open_terminal,
       fs_ops::rename_entry,
       rename::plan_bulk_rename,
       rename::apply_bulk_rename,

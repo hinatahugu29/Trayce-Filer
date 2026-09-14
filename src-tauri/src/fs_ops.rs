@@ -670,6 +670,54 @@ fn create_folder_impl(parent: &str, name: &str) -> Result<PathBuf, String> {
   Ok(target)
 }
 
+/// 空のファイルを作る。名前が衝突したら退避名にする。戻り値は実際に作られたパス。
+#[tauri::command]
+pub fn create_file(app: tauri::AppHandle, parent: String, name: String) -> Result<String, String> {
+  use tauri::Manager;
+
+  let target = create_file_impl(&parent, &name)?;
+  app.state::<crate::undo::UndoStack>().push(crate::undo::UndoAction::CreateFile {
+    path: target.clone(),
+  });
+  Ok(target.to_string_lossy().to_string())
+}
+
+fn create_file_impl(parent: &str, name: &str) -> Result<PathBuf, String> {
+  let parent_dir = Path::new(parent);
+  if !parent_dir.is_dir() {
+    return Err(format!("{parent} はディレクトリではありません"));
+  }
+  validate_name(name)?;
+
+  let target = unique_target(parent_dir, Path::new(name))?;
+  // create_new: 確認と作成の間に同名ができても上書きしない。
+  std::fs::OpenOptions::new()
+    .write(true)
+    .create_new(true)
+    .open(&target)
+    .map_err(|e| format!("作成に失敗: {e}"))?;
+  Ok(target)
+}
+
+/// このフォルダを作業場所にしてターミナルを開く。Windows Terminal が無ければ PowerShell。
+#[tauri::command]
+pub fn open_terminal(path: String) -> Result<(), String> {
+  let dir = Path::new(&path);
+  if !dir.is_dir() {
+    return Err(format!("{path} はディレクトリではありません"));
+  }
+  let wt = std::process::Command::new("wt.exe").arg("-d").arg(dir).spawn();
+  if wt.is_ok() {
+    return Ok(());
+  }
+  std::process::Command::new("cmd.exe")
+    .args(["/c", "start", "", "powershell.exe", "-NoExit"])
+    .current_dir(dir)
+    .spawn()
+    .map(|_| ())
+    .map_err(|e| format!("ターミナルを起動できません: {e}"))
+}
+
 /// 名前を変える。戻り値は変更後のパス。
 #[tauri::command]
 pub fn rename_entry(app: tauri::AppHandle, path: String, new_name: String) -> Result<String, String> {

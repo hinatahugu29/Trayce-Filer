@@ -230,6 +230,7 @@
   }
 
   async function launch(_entry: api.Entry, path: string) {
+    if (!api.confirmLaunch(path)) return
     try {
       await openPath(path)
     } catch (error) {

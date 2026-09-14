@@ -17,6 +17,8 @@ pub enum UndoAction {
   BatchRename { pairs: Vec<(PathBuf, PathBuf)> },
   /// 空フォルダを削除して取り消す。中身が増えていたら安全のため諦める。
   CreateFolder { path: PathBuf },
+  /// 空ファイルを削除して取り消す。書き込まれていたら安全のため諦める。
+  CreateFile { path: PathBuf },
   /// ゴミ箱から元の場所へ復元する。
   Trash { items: Vec<trash::TrashItem> },
   /// コピー/移動で作られたものを取り消す。
@@ -40,6 +42,7 @@ impl UndoAction {
       UndoAction::Rename { to, .. } => format!("名前の変更「{}」", name_of(to)),
       UndoAction::BatchRename { pairs } => format!("一括名前変更（{}件）", pairs.len()),
       UndoAction::CreateFolder { path } => format!("フォルダー作成「{}」", name_of(path)),
+      UndoAction::CreateFile { path } => format!("ファイル作成「{}」", name_of(path)),
       UndoAction::Trash { items } => {
         if items.len() == 1 {
           format!("ゴミ箱へ移動「{}」", items[0].name.to_string_lossy())
@@ -150,6 +153,15 @@ fn apply_undo(action: UndoAction) -> Result<(), String> {
         std::fs::remove_dir(&path).map_err(|e| format!("削除できません: {e}"))?;
       }
       // 既に無ければ何もしなくてよい。
+    }
+
+    UndoAction::CreateFile { path } => {
+      if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 0 {
+          return Err(format!("{} には書き込みがあるため取り消せません", name_of(&path)));
+        }
+        std::fs::remove_file(&path).map_err(|e| format!("削除できません: {e}"))?;
+      }
     }
 
     UndoAction::Trash { items } => {
@@ -302,6 +314,21 @@ mod tests {
 
     assert!(result.is_err());
     assert!(created.join("important.txt").exists(), "中身は無事であるべき");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[test]
+  fn undo_create_file_removes_only_an_empty_file() {
+    let root = scratch("mkfile");
+    let empty = root.join("empty.txt");
+    let written = root.join("written.txt");
+    std::fs::write(&empty, b"").unwrap();
+    std::fs::write(&written, b"keep").unwrap();
+
+    apply_undo(UndoAction::CreateFile { path: empty.clone() }).unwrap();
+    assert!(!empty.exists());
+    assert!(apply_undo(UndoAction::CreateFile { path: written.clone() }).is_err());
+    assert!(written.exists(), "書き込まれた内容は無事であるべき");
     let _ = std::fs::remove_dir_all(&root);
   }
 
