@@ -129,10 +129,9 @@ pub fn list_dir(path: String, sort: Option<SortSpec>) -> Result<DirListing, Stri
   let sort = sort.unwrap_or_default();
   let dir = Path::new(&path);
 
-  // シンボリックリンクや `..` を畳んでから扱う。表示パスとドラッグで渡すパスを一致させるため。
-  let dir = dir
-    .canonicalize()
-    .map_err(|e| format!("{path} を開けません: {e}"))?;
+  // `..` を畳んでから扱う。表示パスとドラッグで渡すパスを一致させるため。
+  // ネットワークドライブの `T:\` をサーバー名へ展開しないよう、canonicalize は使わない。
+  let dir = absolute_plain(dir).map_err(|e| format!("{path} を開けません: {e}"))?;
 
   let read = std::fs::read_dir(&dir).map_err(|e| format!("{} を読めません: {e}", dir.display()))?;
 
@@ -1030,7 +1029,23 @@ pub(crate) fn validate_name(name: &str) -> Result<(), String> {
 /// この形式は他アプリに渡すと解釈されないことがあるので、表示にもドラッグにも使えるよう剥がす。
 pub(crate) fn strip_unc(p: &Path) -> String {
   let s = p.to_string_lossy().to_string();
+  // ネットワーク共有は `\\?\UNC\server\share` になる。`\\?\` だけ外すと `UNC\server` という
+  // 存在しない相対パスになるので、通常の `\\server\share` へ戻す。
+  if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+    return format!(r"\\{rest}");
+  }
   s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
+}
+
+/// 表示・識別に使う絶対パス。
+///
+/// `canonicalize` はネットワークドライブ（`T:\`）をサーバー名のパスへ展開してしまい、
+/// 利用者が見慣れた表記や、お気に入り・履歴と食い違う。ドライブ文字はそのまま保つ。
+pub(crate) fn absolute_plain(p: &Path) -> std::io::Result<PathBuf> {
+  let abs = std::path::absolute(p)?;
+  // 存在確認は canonicalize と同じく行う（無いフォルダを開いたことにしない）。
+  std::fs::metadata(&abs)?;
+  Ok(PathBuf::from(strip_unc(&abs)))
 }
 
 #[cfg(test)]
@@ -1071,6 +1086,20 @@ mod tests {
   #[test]
   fn leaves_plain_path_untouched() {
     assert_eq!(strip_unc(Path::new(r"C:\tmp")), r"C:\tmp");
+  }
+
+  #[test]
+  fn network_share_prefix_becomes_a_normal_unc_path() {
+    assert_eq!(strip_unc(Path::new(r"\\?\UNC\server\TK\品質管理")), r"\\server\TK\品質管理");
+  }
+
+  #[test]
+  fn absolute_plain_keeps_the_drive_letter_and_resolves_dots() {
+    let tmp = std::env::temp_dir();
+    let dotted = tmp.join(".").join("..").join(tmp.file_name().unwrap());
+    let resolved = absolute_plain(&dotted).unwrap();
+    assert_eq!(resolved, PathBuf::from(strip_unc(&std::path::absolute(&tmp).unwrap())));
+    assert!(absolute_plain(&tmp.join("filer_surely_missing_dir")).is_err());
   }
 
   #[test]
