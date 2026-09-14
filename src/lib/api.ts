@@ -120,6 +120,29 @@ export const createFolder = (parent: string, name: string) =>
   invoke<string>('create_folder', { parent, name })
 export const createFile = (parent: string, name: string) =>
   invoke<string>('create_file', { parent, name })
+const ICON_BY_EXT: [RegExp, string][] = [
+  [/^(png|jpe?g|gif|webp|bmp|ico|svg|heic|tiff?)$/, '🖼️'],
+  [/^(mp4|mkv|mov|avi|wmv|webm)$/, '🎞️'],
+  [/^(mp3|wav|flac|aac|ogg|m4a)$/, '🎵'],
+  [/^(zip|7z|rar|tar|gz|bz2|xz)$/, '🗜️'],
+  [/^pdf$/, '📕'],
+  [/^(docx?|rtf|odt)$/, '📘'],
+  [/^(xlsx?|csv|ods)$/, '📗'],
+  [/^(pptx?|odp)$/, '📙'],
+  [/^(exe|msi|bat|cmd|com|ps1|vbs|scr)$/, '⚙️'],
+  [/^lnk$/, '🔗'],
+  [/^(txt|md|markdown|log|ini|cfg|conf)$/, '📝'],
+  [/^(js|ts|jsx|tsx|svelte|vue|rs|py|go|java|c|h|cpp|hpp|cs|html?|css|json|toml|ya?ml|xml|sh|sql)$/, '🧩'],
+]
+
+/** 一覧で種類を見分けるための簡易アイコン。 */
+export function fileIcon(name: string, isDir: boolean): string {
+  if (isDir) return '📁'
+  const dot = name.lastIndexOf('.')
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+  return ICON_BY_EXT.find(([re]) => re.test(ext))?.[1] ?? '📄'
+}
+
 /** ダブルクリックでそのまま動いてしまう種類。開く前に一度だけ確かめる。 */
 const EXECUTABLE = /\.(exe|bat|cmd|com|msi|ps1|vbs|js|lnk|scr)$/i
 export function confirmLaunch(path: string): boolean {
