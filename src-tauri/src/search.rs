@@ -746,7 +746,9 @@ mod tests {
     assert_eq!(result.0, 3);
     assert_eq!(found.len(), 3);
     assert!(found.iter().all(|entry| !entry.view.path.starts_with(r"\\?\")), "結果パスは通常ペインと同じ表記であるべき");
-    assert!(found.iter().any(|entry| entry.view.path == root.join("one.txt").to_string_lossy()));
+    // 走査は起点を正規化する。CI の一時フォルダは `RUNNER~1` のような短縮名なので、期待値も同じ形に揃える。
+    let expected = PathBuf::from(crate::fs_ops::strip_unc(&root.canonicalize().unwrap())).join("one.txt");
+    assert!(found.iter().any(|entry| entry.view.path == expected.to_string_lossy()));
     fs::remove_dir_all(root).unwrap();
   }
 
