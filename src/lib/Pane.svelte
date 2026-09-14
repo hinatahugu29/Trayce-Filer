@@ -720,6 +720,7 @@
 
     switch (action) {
       case 'address':
+      case 'addressAlt':
         ev.preventDefault()
         pathBar?.beginEdit()
         break

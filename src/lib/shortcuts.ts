@@ -7,6 +7,7 @@
 
 export type ActionId =
   | 'address'
+  | 'addressAlt'
   | 'filter'
   | 'copy'
   | 'cut'
@@ -43,6 +44,8 @@ export type ActionDef = {
 
 export const ACTIONS: ActionDef[] = [
   { id: 'address', label: 'アドレスバーへ', fallback: 'Ctrl+L', group: '移動' },
+  // Explorer やブラウザで手に馴染んだ Alt+D も同じ動作にする。
+  { id: 'addressAlt', label: 'アドレスバーへ（別キー）', fallback: 'Alt+D', group: '移動' },
   { id: 'filter', label: 'フォルダ内を絞り込み', fallback: 'Ctrl+F', group: '移動' },
   { id: 'reload', label: '再読み込み', fallback: 'F5', group: '移動' },
 

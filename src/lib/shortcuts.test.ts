@@ -61,6 +61,7 @@ describe('matchAction', () => {
     expect(matchAction(ev({ key: 'q' }), {})).toBe('hoverParent')
     expect(matchAction(ev({ key: 'N', shiftKey: true }), {})).toBe('hoverSplitSearchPane')
     expect(matchAction(ev({ key: ' ' }), {})).toBe('hoverPreview')
+    expect(matchAction(ev({ key: 'd', altKey: true }), {})).toBe('addressAlt')
   })
 
   it('設定で割り当てを変えたら新しい方で当たる', () => {
