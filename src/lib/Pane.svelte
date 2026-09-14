@@ -9,6 +9,9 @@
   import Preview from './Preview.svelte'
   import ContextMenu from './ContextMenu.svelte'
   import type { MenuItem } from './ContextMenu.svelte'
+  import ConflictDialog from './ConflictDialog.svelte'
+  import BulkRenameDialog from './BulkRenameDialog.svelte'
+  import { createConflictPrompt, type ConflictRequest } from './conflicts'
   import FolderSummary from './FolderSummary.svelte'
   import { resolveKey, matchAction } from './shortcuts'
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
@@ -36,6 +39,13 @@
   export let onSplitSearch: (path: string) => void = () => {}
   export let onClose: () => void = () => {}
   export let onDetach: (path: string) => void = () => {}
+  /**
+   * 転送先として固定しているか。固定中は場所を変えず、移動しようとした先は
+   * `onPinnedNavigate` で別のペインに開いてもらう（探索側だけを動かす使い方のため）。
+   */
+  export let pinned = false
+  export let onTogglePin: () => void = () => {}
+  export let onPinnedNavigate: (path: string) => void = () => {}
   export let onKindChange: (kind: api.PaneKind) => void = () => {}
   export let onActivate: () => void = () => {}
   export let onHoverChange: (hovered: boolean) => void = () => {}
@@ -43,6 +53,13 @@
   export let onTrayToggle: (path: string) => void = () => {}
   export let onTrayClear: () => void = () => {}
   export let onTrayRemoveMany: (paths: string[]) => void = () => {}
+  /** タブの全トレイと、選んでいるトレイ。切り替え・追加・名前変更・削除はタブ側が持つ。 */
+  export let trays: api.TraySummary[] = []
+  export let activeTrayId = 0
+  export let onTraySelect: (id: number) => void = () => {}
+  export let onTrayAdd: () => void = () => {}
+  export let onTrayRename: (id: number) => void = () => {}
+  export let onTrayDelete: (id: number) => void = () => {}
   export let sidebarState: api.SavedSidebarState = { primary: 'tree' }
   export let onSidebarChange: (state: api.SavedSidebarState) => void = () => {}
 
@@ -139,10 +156,14 @@
   const NO_ENTRIES: Entry[] = []
   $: allEntries = listing?.entries ?? NO_ENTRIES
 
-  /** フォルダ内の絞り込み。名前に対する部分一致。 */
+  /**
+   * フォルダ内の絞り込み。名前に対する部分一致。
+   * 大文字小文字・全角半角・半角カナは区別しない（検索ペインと同じ規則）。
+   */
   let filter = ''
-  $: entries = filter
-    ? allEntries.filter((e) => e.name.toLowerCase().includes(filter.toLowerCase()))
+  $: filterKey = api.foldForSearch(filter)
+  $: entries = filterKey
+    ? allEntries.filter((e) => api.foldForSearch(e.name).includes(filterKey))
     : allEntries
 
   /** いま監視を頼んでいる場所。移る時に必ず外して二重登録を防ぐ。 */
@@ -162,6 +183,12 @@
   const SLOW_LOAD_MS = 120
 
   export async function open(path: string) {
+    // パスバー・一覧・ツリー・履歴・Q キーはすべてここを通るので、固定の判定はここだけでよい。
+    // 表示前（起動直後）は固定していても最初の場所を開く。
+    if (pinned && listing && api.pathIdentity(path) !== api.pathIdentity(listing.path)) {
+      onPinnedNavigate(path)
+      return
+    }
     try {
       const t0 = performance.now()
       listing = await api.listDir(path, sort)
@@ -216,9 +243,10 @@
     try {
       const data = await api.getClipboard()
       if (!data.paths.length) return
-      await runTransfer(data.paths, listing.path, data.cut)
+      const started = await runTransfer(data.paths, listing.path, data.cut)
       // 切り取りは一度きり。二度目は元が無いので消しておく。
-      if (data.cut) await api.setClipboard([], false)
+      // 衝突の確認で取りやめた場合は、まだ何も動いていないので残す。
+      if (data.cut && started) await api.setClipboard([], false)
     } catch (e) {
       onNote(`貼り付け失敗: ${e}`)
       error = String(e)
@@ -270,19 +298,111 @@
   let transferId: number | null = null
   let trayTransfer: { moveFiles: boolean } | null = null
 
-  async function runTransfer(paths: string[], dest: string, moveFiles: boolean) {
+  /** 衝突の確認ダイアログ。転送先に同名があれば選んでもらう。 */
+  let conflictRequest: ConflictRequest | null = null
+  const conflicts = createConflictPrompt((request) => (conflictRequest = request))
+
+  /**
+   * 転送の順番待ち。
+   *
+   * 以前は転送中に次を始めると、動いている転送の ID を上書きして進捗も完了も見失っていた。
+   * 衝突の確認は依頼した時点で済ませ、選んだ扱いを持ったまま順に流す。
+   */
+  type TransferJob = { paths: string[]; dest: string; moveFiles: boolean; conflict: api.ConflictPolicy; fromTray: boolean }
+  let queue: TransferJob[] = []
+  /** 開始を依頼して ID が返るまでの間。完了がこの間に届くことがある（小さな転送）。 */
+  let startingTransfer = false
+  let earlyProgress: api.ProgressEvent | null = null
+  let earlyDone: api.DoneEvent | null = null
+
+  $: transferBusy = transferId !== null || startingTransfer
+
+  /** 戻り値は転送を始めた（または順番待ちに入れた）か。衝突の確認で取りやめた場合は false。 */
+  async function runTransfer(paths: string[], dest: string, moveFiles: boolean, fromTray = false): Promise<boolean> {
+    if (conflicts.open) return false
     try {
-      transferId = await api.startTransfer(paths, dest, moveFiles)
+      const conflict = await conflicts.ask(paths, dest, moveFiles)
+      if (!conflict) {
+        onNote(`${moveFiles ? '移動' : 'コピー'}を取りやめました`)
+        return false
+      }
+      const job: TransferJob = { paths, dest, moveFiles, conflict, fromTray }
+      if (transferBusy) {
+        queue = [...queue, job]
+        onNote(`順番待ちに追加しました（${queue.length}件目）`)
+        return true
+      }
+      await startJob(job)
+      return true
     } catch (e) {
       error = String(e)
+      return false
     }
   }
 
+  async function startJob(job: TransferJob) {
+    startingTransfer = true
+    earlyProgress = null
+    earlyDone = null
+    trayTransfer = job.fromTray ? { moveFiles: job.moveFiles } : null
+    try {
+      transferId = await api.startTransfer(job.paths, job.dest, job.moveFiles, job.conflict)
+    } catch (e) {
+      trayTransfer = null
+      error = String(e)
+      onNote(`転送を開始できません: ${e}`)
+      startingTransfer = false
+      await startNextJob()
+      return
+    }
+    startingTransfer = false
+    // await の間にイベントの受け口が書き換えるので、ここで読み直す
+    // （関数の先頭で null を入れたままだと型の上では null に絞り込まれてしまう）。
+    const bufferedProgress = earlyProgress as api.ProgressEvent | null
+    const bufferedDone = earlyDone as api.DoneEvent | null
+    earlyProgress = null
+    earlyDone = null
+    if (bufferedProgress && bufferedProgress.id === transferId) progress = bufferedProgress
+    if (bufferedDone && bufferedDone.id === transferId) await finishTransfer(bufferedDone)
+  }
+
+  async function startNextJob() {
+    const [next, ...rest] = queue
+    if (!next) return
+    queue = rest
+    await startJob(next)
+  }
+
+  function clearQueue() {
+    const count = queue.length
+    queue = []
+    if (count) onNote(`順番待ちの ${count}件 を取り消しました`)
+  }
+
+  async function finishTransfer(payload: api.DoneEvent) {
+    const { cancelled, created, completedSources, error: err } = payload
+    const completedTrayMove = trayTransfer?.moveFiles ? completedSources : []
+    progress = null
+    transferId = null
+    trayTransfer = null
+
+    if (completedTrayMove.length) onTrayRemoveMany(completedTrayMove)
+
+    if (err) {
+      error = err
+      onNote(`転送に失敗: ${err}`)
+    } else if (cancelled) {
+      onNote('転送を中断しました')
+    } else {
+      onNote(`転送 ${created}件`)
+    }
+    await reload()
+    await startNextJob()
+  }
+
   async function transferTray(paths: string[], moveFiles: boolean) {
-    if (!listing || !paths.length || transferId !== null) return
-    trayTransfer = { moveFiles }
-    await runTransfer(paths, listing.path, moveFiles)
-    if (transferId === null) trayTransfer = null
+    if (!listing || !paths.length) return
+    await runTransfer(paths, listing.path, moveFiles, true)
   }
 
   /** 同じ列をもう一度押したら昇順/降順を反転する。 */
@@ -301,6 +421,7 @@
   }
 
   async function launch(_entry: Entry, path: string) {
+    if (!api.confirmLaunch(path)) return
     try {
       await openPath(path)
     } catch (e) {
@@ -384,8 +505,45 @@
     }
   }
 
+  async function newFile() {
+    if (!listing) return
+    try {
+      const created = await api.createFile(listing.path, '新しいテキスト ドキュメント.txt')
+      await reload()
+      renaming = { path: created, value: created.split(/[\\/]/).pop() ?? '' }
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  async function openTerminalHere() {
+    if (!listing) return
+    try {
+      await api.openTerminal(listing.path)
+    } catch (e) {
+      onNote(String(e))
+    }
+  }
+
   /** リネーム中の対象。null なら非表示。 */
   let renaming: { path: string; value: string } | null = null
+
+  /** 一括名前変更の対象（一覧の表示順）。null なら閉じている。 */
+  let bulkRenamePaths: string[] | null = null
+
+  function startBulkRename() {
+    if (!listing || !selection.length) return
+    // 連番は見えている並び順で振りたい。選択した順ではなく一覧の順に並べ直す。
+    const chosen = new Set(selection.map(api.pathIdentity))
+    const dir = listing.path
+    bulkRenamePaths = entries.map((entry) => api.joinPath(dir, entry.name)).filter((path) => chosen.has(api.pathIdentity(path)))
+  }
+
+  async function finishBulkRename(count: number) {
+    bulkRenamePaths = null
+    onNote(`${count}件の名前を変更しました（Ctrl+Z で戻せます）`)
+    await reload()
+  }
 
   function startRename(entry: Entry) {
     if (!listing) return
@@ -455,6 +613,40 @@
   /** ショートカット表記をメニューに添える。操作を覚えてもらう導線になる。 */
   const hint = (id: Parameters<typeof resolveKey>[0]) => resolveKey(id, settings.shortcuts)
 
+  /**
+   * フォルダの中身の合計を数えて知らせる。
+   * 一覧ではフォルダの大きさを 0 にしている（開くだけで木全体を読まないため）ので、必要な時だけ数える。
+   */
+  async function measureFolder(path: string) {
+    const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path
+    onNote(`「${name}」の大きさを数えています…`)
+    try {
+      const { files, bytes } = await api.measureFolder(path)
+      onNote(`「${name}」: ${files.toLocaleString()} ファイル・${api.formatSize(bytes)}`)
+    } catch (e) {
+      onNote(`大きさを数えられません: ${e}`)
+    }
+  }
+
+  /**
+   * 選択をトレイに入れる／外す項目。
+   * 選択が全部トレイにあれば「外す」、1つでも無ければ「入れる」（混在時に一部だけ外れる事故を避ける）。
+   */
+  function trayMenuItem(): MenuItem {
+    const keys = new Set(trayItems.map(api.pathIdentity))
+    const allIn = selection.length > 0 && selection.every((path) => keys.has(api.pathIdentity(path)))
+    return {
+      kind: 'item',
+      label: allIn ? 'トレイから外す' : 'トレイに入れる',
+      hint: 'Alt+クリック',
+      disabled: selection.length === 0,
+      run: () => {
+        if (allIn) onTrayRemoveMany(selection)
+        else selection.filter((path) => !keys.has(api.pathIdentity(path))).forEach(onTrayToggle)
+      },
+    }
+  }
+
   function openContextMenu(ev: MouseEvent, entry: Entry | null) {
     const n = selection.length
     const one = n === 1 ? selection[0] : null
@@ -468,7 +660,29 @@
               const full = api.joinPath(listing.path, entry.name)
               entry.is_dir ? open(full) : launch(entry, full)
             } },
+          ...(entry.is_dir
+            ? []
+            : ([{ kind: 'item', label: 'プログラムから開く…', run: () => {
+                if (listing) api.openWith(api.joinPath(listing.path, entry.name)).catch((e) => onNote(String(e)))
+              } }] as MenuItem[])),
           { kind: 'item', label: 'エクスプローラーで表示', run: revealSelection },
+          { kind: 'item', label: 'その他のオプション（Windows）', run: () => {
+              api.showShellMenu(selection).catch((e) => onNote(String(e)))
+            } },
+          { kind: 'item', label: 'プロパティ', disabled: n !== 1, run: () => {
+              if (one) api.showProperties(one).catch((e) => onNote(String(e)))
+            } },
+          // フォルダを見つけた後に「この中から探す」へ一手で移る。元のペインは残す。
+          ...(entry.is_dir
+            ? ([
+                { kind: 'item', label: 'このフォルダ内を検索', hint: hint('hoverSplitSearchPane'), run: () => {
+                  if (listing) onSplitSearch(api.joinPath(listing.path, entry.name))
+                } },
+                { kind: 'item', label: '大きさを数える', run: () => {
+                  if (listing) measureFolder(api.joinPath(listing.path, entry.name))
+                } },
+              ] as MenuItem[])
+            : []),
           { kind: 'sep' },
           { kind: 'item', label: 'コピー', hint: hint('copy'), run: () => copySelection(false) },
           { kind: 'item', label: '切り取り', hint: hint('cut'), run: () => copySelection(true) },
@@ -477,6 +691,9 @@
           { kind: 'item', label: 'フルパスをコピー', hint: hint('copyPath'), run: copyFullPaths },
           { kind: 'item', label: '名前をコピー', run: copyNames },
           { kind: 'sep' },
+          // Alt+クリックを知らなくても集められるように。選択全体に対して入れる／外す。
+          trayMenuItem(),
+          { kind: 'sep' },
           { kind: 'item', label: 'ZIP に圧縮', hint: hint('zip'), run: zipSelection },
           // ZIP を選んでいる時だけ出す。常に出して無効化するより一覧が短くなる。
           ...(isZip
@@ -484,15 +701,25 @@
             : []),
           { kind: 'sep' },
           { kind: 'item', label: '名前を変更', hint: hint('rename'), disabled: n !== 1, run: () => startRename(entry) },
+          // 置換・連番・大文字小文字をまとめて。適用前に一覧で確かめられ、Ctrl+Z で戻せる。
+          { kind: 'item', label: n > 1 ? `${n}件の名前をまとめて変更…` : 'まとめて名前を変更…', disabled: n === 0, run: startBulkRename },
           { kind: 'item', label: 'ゴミ箱へ送る', hint: hint('trash'), danger: true, run: () => trashSelection(selection) },
         ]
       : [
           // 空き領域＝「この場所」に対する操作。
           { kind: 'item', label: '新しいフォルダー', hint: hint('newFolder'), run: newFolder },
+          { kind: 'item', label: '新しいテキストファイル', run: newFile },
           { kind: 'item', label: '貼り付け', hint: hint('paste'), run: paste },
           { kind: 'sep' },
           { kind: 'item', label: 'このフォルダのパスをコピー', hint: hint('copyPath'), run: copyFullPaths },
           { kind: 'item', label: 'エクスプローラーで表示', run: revealSelection },
+          { kind: 'item', label: 'ここでターミナルを開く', run: openTerminalHere },
+          { kind: 'item', label: 'このフォルダ内を検索', hint: hint('hoverSplitSearchPane'), run: () => {
+              if (listing) onSplitSearch(listing.path)
+            } },
+          { kind: 'item', label: 'このフォルダの大きさを数える', run: () => {
+              if (listing) measureFolder(listing.path)
+            } },
           { kind: 'sep' },
           { kind: 'item', label: '再読み込み', hint: hint('reload'), run: reload },
           { kind: 'item', label: sort.showHidden ? '隠しファイルを隠す' : '隠しファイルを表示', run: toggleHidden },
@@ -527,6 +754,7 @@
 
     switch (action) {
       case 'address':
+      case 'addressAlt':
         ev.preventDefault()
         pathBar?.beginEdit()
         break
@@ -611,46 +839,41 @@
   let unlistenProgress: UnlistenFn | null = null
   let unlistenDone: UnlistenFn | null = null
   let reloadTimer: number | null = null
+  let firstFsChangeAt: number | null = null
+  const FS_RELOAD_DEBOUNCE = 250
+  const FS_RELOAD_MAX_WAIT = 1000
 
   onMount(async () => {
     await open(initialPath)
 
     // 転送イベントは窓全体に飛ぶので、自分が始めたものだけ拾う。
+    // 開始の応答（ID）より先に届いた分は、ID が分かるまで預かっておく。
+    // 捨てると、小さな転送で完了を見逃し「転送中」のまま次の順番待ちも動かなくなる。
     unlistenProgress = await listen<api.ProgressEvent>(api.TRANSFER_PROGRESS, (ev) => {
-      if (ev.payload.id !== transferId) return
-      progress = ev.payload
+      if (ev.payload.id === transferId) progress = ev.payload
+      else if (startingTransfer) earlyProgress = ev.payload
     })
 
     unlistenDone = await listen<api.DoneEvent>(api.TRANSFER_DONE, async (ev) => {
-      if (ev.payload.id !== transferId) return
-      const { cancelled, created, completedSources, error: err } = ev.payload
-      const completedTrayMove = trayTransfer?.moveFiles ? completedSources : []
-      progress = null
-      transferId = null
-      trayTransfer = null
-
-      if (completedTrayMove.length) onTrayRemoveMany(completedTrayMove)
-
-      if (err) {
-        error = err
-        onNote(`転送に失敗: ${err}`)
-      } else if (cancelled) {
-        onNote('転送を中断しました')
-      } else {
-        onNote(`転送 ${created}件`)
-      }
-      await reload()
+      if (ev.payload.id === transferId) await finishTransfer(ev.payload)
+      else if (startingTransfer) earlyDone = ev.payload
     })
 
     // 外で作られたファイルが見えないままだと、ファイラとして信用できない。
     // 変更通知は連続して飛んでくるので、少し溜めてから1回だけ読み直す。
+    // ただし通知が途切れない間（大量コピーの受け側など）待ち続けると一覧が全く更新されないので、
+    // 最初の通知から一定時間経ったら溜まっていても読み直す。
     unlistenFs = await listen<string>(api.FS_CHANGED, (ev) => {
       if (ev.payload !== listing?.path) return
       if (reloadTimer !== null) clearTimeout(reloadTimer)
+      const now = Date.now()
+      if (firstFsChangeAt === null) firstFsChangeAt = now
+      const delay = now - firstFsChangeAt >= FS_RELOAD_MAX_WAIT ? 0 : FS_RELOAD_DEBOUNCE
       reloadTimer = window.setTimeout(() => {
         reloadTimer = null
+        firstFsChangeAt = null
         reload()
-      }, 250)
+      }, delay)
     })
   })
 
@@ -703,6 +926,17 @@
         on:click={toggleFavorite}
       >
         {isFavorite ? '★' : '☆'}
+      </button>
+      <button
+        type="button"
+        title={pinned
+          ? '固定を解除（このペインで移動できるようにする）'
+          : 'このペインを固定（移動しようとした先は別のペインで開く）'}
+        class:on={pinned}
+        aria-pressed={pinned}
+        on:click={onTogglePin}
+      >
+        📌
       </button>
       <button
         type="button"
@@ -782,7 +1016,12 @@
           {onTrayRemoveMany}
           {onTrayClear}
           onTrayTransfer={transferTray}
-          trayTransferBusy={transferId !== null}
+          {trays}
+              {activeTrayId}
+              {onTraySelect}
+              {onTrayAdd}
+              {onTrayRename}
+              {onTrayDelete}
           />
         </div>
         {#if sidebarSecondary}
@@ -801,7 +1040,12 @@
               {onTrayRemoveMany}
               {onTrayClear}
               onTrayTransfer={transferTray}
-              trayTransferBusy={transferId !== null}
+              {trays}
+              {activeTrayId}
+              {onTraySelect}
+              {onTrayAdd}
+              {onTrayRename}
+              {onTrayDelete}
             />
           </div>
         {/if}
@@ -901,7 +1145,9 @@
     {/if}
   </div>
 
-  <TransferBar {progress} />
+  <TransferBar {progress} queued={queue.length} onClearQueue={clearQueue} />
+  <ConflictDialog request={conflictRequest} onChoose={conflicts.choose} />
+  <BulkRenameDialog paths={bulkRenamePaths} onClose={() => (bulkRenamePaths = null)} onApplied={finishBulkRename} />
 
   <div class="count">
     {listing?.entries.length ?? 0} 件{#if selection.length}<span class="sel"
@@ -948,10 +1194,13 @@
     box-shadow: inset 0 2px 0 0 #63cfad, inset 0 0 0 1px rgba(99, 207, 173, 0.22);
   }
 
+  /* 下の段へ回った時は右寄せで並べ、それでも入らなければさらに折り返す。 */
   .actions {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 4px;
-    margin: 10px 8px 0 0;
+    margin: 10px 8px 8px auto;
   }
   .actions button {
     width: 24px;
@@ -1029,7 +1278,10 @@
     color: #7fb0e8;
   }
 
+  /* FileList の列の畳み方（@container）の基準。検索ペインと同じく、ここを幅の容器にする。
+     指定が無いと規則が効かず、狭いペインで固定幅の列に押されて名前の列が消えていた。 */
   .list-slot {
+    container-type: inline-size;
     position: relative;
     display: flex;
     flex-direction: column;

@@ -261,6 +261,21 @@ pub fn window_initial_path(app: AppHandle, label: String) -> Option<String> {
     .map(|info| info.path.clone())
 }
 
+/// 最後に前面にあったファイラ窓を出す。二重起動された時の受け皿。
+/// 登録済みの窓が無ければ main を試す（起動直後でまだ自己申告前の場合）。
+pub fn focus_most_recent_window(app: &AppHandle) {
+  let label = app
+    .state::<Registry>()
+    .sorted()
+    .into_iter()
+    .map(|info| info.label)
+    .find(|label| app.get_webview_window(label).is_some())
+    .unwrap_or_else(|| "main".into());
+  if let Err(error) = focus_window(app.clone(), label) {
+    log::warn!("二重起動時に既存の窓を出せません: {error}");
+  }
+}
+
 /// 起動直後の最初の窓をレジストリに載せる。
 /// main 窓は Rust 側の open_window を通らないので、フロントから自己申告してもらう。
 #[tauri::command]

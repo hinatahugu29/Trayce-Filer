@@ -9,7 +9,9 @@ import {
   formatModified,
   joinPath,
   pathIdentity,
+  foldForSearch,
 } from './api'
+import normalizeFixture from '../../tests/fixtures/search-normalize.json'
 
 describe('splitPath', () => {
   it('末尾のフォルダ名と上位階層を分ける', () => {
@@ -84,6 +86,17 @@ describe('pathIdentity', () => {
   it('末尾区切りを無視しつつドライブ根を壊さない', () => {
     expect(pathIdentity('C:\\Work\\')).toBe(pathIdentity('c:\\work'))
     expect(pathIdentity('C:\\')).toBe('c:\\')
+  })
+})
+
+describe('foldForSearch', () => {
+  // Rust の search::normalize と同じ表で確かめ、片方だけ規則が変わる事故を防ぐ。
+  it.each(normalizeFixture.normalize)('$note: $input → $expected', ({ input, expected }) => {
+    expect(foldForSearch(input)).toBe(expected)
+  })
+
+  it('全角で打った語が半角カナの名前に一致する', () => {
+    expect(foldForSearch('ｶﾀﾛｸﾞ_Draft.PDF').includes(foldForSearch('カタログ＿ＤＲＡＦＴ'))).toBe(true)
   })
 })
 

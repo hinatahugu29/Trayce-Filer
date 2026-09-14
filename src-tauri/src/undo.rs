@@ -13,16 +13,25 @@ const HISTORY_CAP: usize = 50;
 pub enum UndoAction {
   /// `to` を `from` の名前へ戻す。
   Rename { from: PathBuf, to: PathBuf },
+  /// 一括名前変更。(元, 先) の組を、二段階の名前変更で元へ戻す（入れ替えを含んでも衝突しない）。
+  BatchRename { pairs: Vec<(PathBuf, PathBuf)> },
   /// 空フォルダを削除して取り消す。中身が増えていたら安全のため諦める。
   CreateFolder { path: PathBuf },
-  /// ゴミ箱から元の場所へ復元する。
-  Trash { items: Vec<trash::TrashItem> },
+  /// 空ファイルを削除して取り消す。書き込まれていたら安全のため諦める。
+  CreateFile { path: PathBuf },
+  /// ゴミ箱から元の場所へ復元する。送った時の元の場所で持ち、取り消す時にゴミ箱から探す。
+  Trash { paths: Vec<PathBuf> },
   /// コピー/移動で作られたものを取り消す。
   Transfer {
     /// (元のパス, 作られたパス) の対応。移動なら created を from へ戻す。
     pairs: Vec<(PathBuf, PathBuf)>,
     /// true なら移動だった（元を消していたので戻す）。false ならコピー（作られた方を消すだけ）。
     was_move: bool,
+    /// 上書きでゴミ箱へ送った既存項目の元の場所。取り消し時にゴミ箱から戻す。
+    ///
+    /// `TrashItem` ではなくパスで持つ。転送のたびにゴミ箱を全件列挙すると遅いので、
+    /// 列挙は取り消しを実行する時だけにする。
+    replaced: Vec<PathBuf>,
   },
 }
 
@@ -31,20 +40,27 @@ impl UndoAction {
   fn label(&self) -> String {
     match self {
       UndoAction::Rename { to, .. } => format!("名前の変更「{}」", name_of(to)),
+      UndoAction::BatchRename { pairs } => format!("一括名前変更（{}件）", pairs.len()),
       UndoAction::CreateFolder { path } => format!("フォルダー作成「{}」", name_of(path)),
-      UndoAction::Trash { items } => {
-        if items.len() == 1 {
-          format!("ゴミ箱へ移動「{}」", items[0].name.to_string_lossy())
+      UndoAction::CreateFile { path } => format!("ファイル作成「{}」", name_of(path)),
+      UndoAction::Trash { paths } => {
+        if paths.len() == 1 {
+          format!("ゴミ箱へ移動「{}」", name_of(&paths[0]))
         } else {
-          format!("ゴミ箱へ移動（{}件）", items.len())
+          format!("ゴミ箱へ移動（{}件）", paths.len())
         }
       }
-      UndoAction::Transfer { pairs, was_move } => {
+      UndoAction::Transfer { pairs, was_move, replaced } => {
         let verb = if *was_move { "移動" } else { "コピー" };
-        if pairs.len() == 1 {
+        let base = if pairs.len() == 1 {
           format!("{verb}「{}」", name_of(&pairs[0].1))
         } else {
           format!("{verb}（{}件）", pairs.len())
+        };
+        if replaced.is_empty() {
+          base
+        } else {
+          format!("{base}・上書きした{}件をゴミ箱から戻す", replaced.len())
         }
       }
     }
@@ -116,6 +132,14 @@ fn apply_undo(action: UndoAction) -> Result<(), String> {
       std::fs::rename(&to, &from).map_err(|e| format!("元に戻せません: {e}"))?;
     }
 
+    UndoAction::BatchRename { pairs } => {
+      if let Some((_, missing)) = pairs.iter().find(|(_, to)| !to.exists()) {
+        return Err(format!("{} が見つかりません（既に変更・削除された可能性があります）", name_of(missing)));
+      }
+      let reversed: Vec<(PathBuf, PathBuf)> = pairs.into_iter().map(|(from, to)| (to, from)).collect();
+      crate::rename::rename_pairs(&reversed)?;
+    }
+
     UndoAction::CreateFolder { path } => {
       // 中身が増えていたら、作成の取り消しのつもりで中身ごと消すのは危険。
       // ユーザーが既に何か入れた可能性があるので安全側に倒して諦める。
@@ -131,11 +155,20 @@ fn apply_undo(action: UndoAction) -> Result<(), String> {
       // 既に無ければ何もしなくてよい。
     }
 
-    UndoAction::Trash { items } => {
-      trash::os_limited::restore_all(items).map_err(|e| format!("復元できません: {e}"))?;
+    UndoAction::CreateFile { path } => {
+      if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 0 {
+          return Err(format!("{} には書き込みがあるため取り消せません", name_of(&path)));
+        }
+        std::fs::remove_file(&path).map_err(|e| format!("削除できません: {e}"))?;
+      }
     }
 
-    UndoAction::Transfer { pairs, was_move } => {
+    UndoAction::Trash { paths } => {
+      restore_from_trash(&paths, "")?;
+    }
+
+    UndoAction::Transfer { pairs, was_move, replaced } => {
       let mut failed = Vec::new();
       for (from, to) in pairs {
         if !to.exists() {
@@ -174,9 +207,37 @@ fn apply_undo(action: UndoAction) -> Result<(), String> {
         }
       }
       if !failed.is_empty() {
+        // 新しい方が退かせていないと、既存を戻す場所がふさがっている。戻さずに知らせる。
         return Err(format!("一部を元に戻せませんでした: {}", failed.join(", ")));
       }
+      // 新しい方を退かした後で、上書き前の既存項目を元の場所へ戻す。
+      if !replaced.is_empty() {
+        restore_from_trash(&replaced, "上書き前の")?;
+      }
     }
+  }
+  Ok(())
+}
+
+/// ゴミ箱へ送った項目を、元の場所へ戻す。`what` はメッセージで項目を言い表す前置き。
+/// 同じ場所が何度もゴミ箱に入っていることがあるので、それぞれ最も新しく消したものを選ぶ。
+fn restore_from_trash(replaced: &[PathBuf], what: &str) -> Result<(), String> {
+  let wanted: std::collections::HashSet<&PathBuf> = replaced.iter().collect();
+  let mut items: Vec<trash::TrashItem> = trash::os_limited::list()
+    .map_err(|e| format!("ゴミ箱を読めません: {e}"))?
+    .into_iter()
+    .filter(|item| wanted.contains(&item.original_path()))
+    .collect();
+  items.sort_by_key(|item| std::cmp::Reverse(item.time_deleted));
+  let mut seen = std::collections::HashSet::new();
+  items.retain(|item| seen.insert(item.original_path()));
+
+  let missing = replaced.len() - items.len();
+  if !items.is_empty() {
+    trash::os_limited::restore_all(items).map_err(|e| format!("{what}項目を復元できません: {e}"))?;
+  }
+  if missing > 0 {
+    return Err(format!("{what}項目のうち {missing}件はゴミ箱に見つかりませんでした（既に空にした可能性があります）"));
   }
   Ok(())
 }
@@ -257,6 +318,21 @@ mod tests {
   }
 
   #[test]
+  fn undo_create_file_removes_only_an_empty_file() {
+    let root = scratch("mkfile");
+    let empty = root.join("empty.txt");
+    let written = root.join("written.txt");
+    std::fs::write(&empty, b"").unwrap();
+    std::fs::write(&written, b"keep").unwrap();
+
+    apply_undo(UndoAction::CreateFile { path: empty.clone() }).unwrap();
+    assert!(!empty.exists());
+    assert!(apply_undo(UndoAction::CreateFile { path: written.clone() }).is_err());
+    assert!(written.exists(), "書き込まれた内容は無事であるべき");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[test]
   fn undo_transfer_copy_removes_the_created_file() {
     let root = scratch("undo_copy");
     let src = root.join("src.txt");
@@ -264,7 +340,7 @@ mod tests {
     std::fs::write(&src, b"x").unwrap();
     std::fs::copy(&src, &dst).unwrap();
 
-    apply_undo(UndoAction::Transfer { pairs: vec![(src.clone(), dst.clone())], was_move: false })
+    apply_undo(UndoAction::Transfer { pairs: vec![(src.clone(), dst.clone())], was_move: false, replaced: vec![] })
       .unwrap();
 
     assert!(!dst.exists(), "コピー先は消えるべき");
@@ -280,12 +356,23 @@ mod tests {
     std::fs::write(&src, b"x").unwrap();
     std::fs::rename(&src, &dst).unwrap();
 
-    apply_undo(UndoAction::Transfer { pairs: vec![(src.clone(), dst.clone())], was_move: true })
+    apply_undo(UndoAction::Transfer { pairs: vec![(src.clone(), dst.clone())], was_move: true, replaced: vec![] })
       .unwrap();
 
     assert!(src.exists(), "移動元に戻るべき");
     assert!(!dst.exists());
     let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// 上書きを含む転送は、取り消しで既存も戻ることを利用者に伝える。
+  /// （ゴミ箱からの実際の復元は利用者のゴミ箱を触るため、ここでは確かめない。）
+  #[test]
+  fn transfer_label_mentions_replaced_items() {
+    let pairs = vec![(PathBuf::from(r"C:\from\a.txt"), PathBuf::from(r"C:\to\a.txt"))];
+    let plain = UndoAction::Transfer { pairs: pairs.clone(), was_move: false, replaced: vec![] };
+    assert_eq!(plain.label(), "コピー「a.txt」");
+    let overwrote = UndoAction::Transfer { pairs, was_move: false, replaced: vec![PathBuf::from(r"C:\to\a.txt")] };
+    assert_eq!(overwrote.label(), "コピー「a.txt」・上書きした1件をゴミ箱から戻す");
   }
 
   #[test]

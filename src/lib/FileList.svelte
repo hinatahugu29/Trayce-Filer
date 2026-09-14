@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { startDrag } from '@crabnebula/tauri-plugin-drag'
-  import { formatSize, formatModified, joinPath, pathIdentity } from './api'
+  import { fileIcon, formatSize, formatModified, joinPath, pathIdentity } from './api'
   import type { Entry, SortKey, SortSpec } from './api'
 
   export let entries: Entry[] = []
@@ -367,7 +367,7 @@
             on:pointerdown={(e) => onPointerDown(entry, e)}
           >
             <span class="col c-name">
-              <span class="icon">{entry.is_dir ? '📁' : '📄'}</span>
+              <span class="icon">{fileIcon(entry.name, entry.is_dir)}</span>
               <span class="name-stack"><span class="name">{entry.name}</span>{#if secondaryLabel(entry)}<small>{secondaryLabel(entry)}</small>{/if}</span>
               {#if trayKeys.has(pathIdentity(fullPath(entry)))}<span class="tray-mark" title="トレイに登録済み">◈</span>{/if}
             </span>

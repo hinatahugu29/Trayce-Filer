@@ -16,7 +16,12 @@
   export let onTrayRemoveMany: (paths: string[]) => void = () => {}
   export let onTrayClear: () => void = () => {}
   export let onTrayTransfer: (paths: string[], moveFiles: boolean) => void = () => {}
-  export let trayTransferBusy = false
+  export let trays: api.TraySummary[] = []
+  export let activeTrayId = 0
+  export let onTraySelect: (id: number) => void = () => {}
+  export let onTrayAdd: () => void = () => {}
+  export let onTrayRename: (id: number) => void = () => {}
+  export let onTrayDelete: (id: number) => void = () => {}
 
   /** どのタブを開くか。ペインごとに独立して覚える。 */
   export let tab: api.SidebarTab = 'tree'
@@ -130,8 +135,13 @@
         onRemoveMany={onTrayRemoveMany}
         onClear={onTrayClear}
         onTransfer={onTrayTransfer}
-        transferBusy={trayTransferBusy}
         destinationPath={currentPath}
+        {trays}
+        {activeTrayId}
+        onSelect={onTraySelect}
+        onAdd={onTrayAdd}
+        onRename={onTrayRename}
+        onDelete={onTrayDelete}
       />
     {/if}
   </div>

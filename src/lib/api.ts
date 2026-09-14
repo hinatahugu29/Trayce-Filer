@@ -32,6 +32,32 @@ export function pathIdentity(path: string): string {
     : normalized.replace(/\\+$/, '')
   return withoutTrailing.toLocaleLowerCase('en-US')
 }
+/** U+FF61〜U+FF9F の半角カナに対応する全角文字。Rust 側 search.rs と同じ表。 */
+const HALFWIDTH_KANA = '。「」、・ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン゛゜'
+
+/**
+ * 絞り込み用に表記の揺れを畳む。Rust の `search::normalize` と同じ規則。
+ *
+ * 英字の大文字小文字、全角英数記号と半角、全角空白、半角カナ（濁点合成を含む）を同一視する。
+ * 表示用の文字列には使わず、比較の両辺にだけ掛ける。
+ */
+export function foldForSearch(value: string): string {
+  // NFKC は全角英数・半角カナ・濁点合成をまとめて扱える。
+  // ただし `①`→`1` や `㍻`→`平成` まで畳むので、Rust 側と結果を揃えるため範囲を限る。
+  let out = ''
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!
+    if (code === 0x3000) out += ' '
+    else if (code >= 0xff01 && code <= 0xff5e) out += String.fromCodePoint(code - 0xfee0)
+    else if ((code === 0xff9e || code === 0xff9f) && out) {
+      const composed = (out.slice(-1) + (code === 0xff9e ? '゙' : '゚')).normalize('NFC')
+      out = composed.length === 1 ? out.slice(0, -1) + composed : out + HALFWIDTH_KANA[code - 0xff61]
+    } else if (code >= 0xff61 && code <= 0xff9f) out += HALFWIDTH_KANA[code - 0xff61]
+    else out += ch
+  }
+  return out.toLowerCase()
+}
+
 export type Listing = { path: string; parent: string | null; entries: Entry[] }
 
 export type SortKey = 'name' | 'size' | 'modified' | 'ext'
@@ -92,10 +118,86 @@ export const listDir = (path: string, sort?: SortSpec) => invoke<Listing>('list_
 
 export const createFolder = (parent: string, name: string) =>
   invoke<string>('create_folder', { parent, name })
-export const renameEntry = (path: string, newName: string) =>
+export const createFile = (parent: string, name: string) =>
+  invoke<string>('create_file', { parent, name })
+const ICON_BY_EXT: [RegExp, string][] = [
+  [/^(png|jpe?g|gif|webp|bmp|ico|svg|heic|tiff?)$/, '🖼️'],
+  [/^(mp4|mkv|mov|avi|wmv|webm)$/, '🎞️'],
+  [/^(mp3|wav|flac|aac|ogg|m4a)$/, '🎵'],
+  [/^(zip|7z|rar|tar|gz|bz2|xz)$/, '🗜️'],
+  [/^pdf$/, '📕'],
+  [/^(docx?|rtf|odt)$/, '📘'],
+  [/^(xlsx?|csv|ods)$/, '📗'],
+  [/^(pptx?|odp)$/, '📙'],
+  [/^(exe|msi|bat|cmd|com|ps1|vbs|scr)$/, '⚙️'],
+  [/^lnk$/, '🔗'],
+  [/^(txt|md|markdown|log|ini|cfg|conf)$/, '📝'],
+  [/^(js|ts|jsx|tsx|svelte|vue|rs|py|go|java|c|h|cpp|hpp|cs|html?|css|json|toml|ya?ml|xml|sh|sql)$/, '🧩'],
+]
+
+/** 一覧で種類を見分けるための簡易アイコン。 */
+export function fileIcon(name: string, isDir: boolean): string {
+  if (isDir) return '📁'
+  const dot = name.lastIndexOf('.')
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+  return ICON_BY_EXT.find(([re]) => re.test(ext))?.[1] ?? '📄'
+}
+
+/** ダブルクリックでそのまま動いてしまう種類。開く前に一度だけ確かめる。 */
+const EXECUTABLE = /\.(exe|bat|cmd|com|msi|ps1|vbs|js|lnk|scr)$/i
+export function confirmLaunch(path: string): boolean {
+  const name = path.split(/[\\/]/).pop() ?? path
+  return !EXECUTABLE.test(name) || confirm(`${name} を実行しますか？`)
+}
+export const openWith = (path: string) => invoke<void>('open_with', { path })
+export const showProperties = (path: string) => invoke<void>('show_properties', { path })
+/** Windows 本来の右クリックメニューをマウス位置に出す。 */
+export const showShellMenu = (paths: string[]) => invoke<void>('show_shell_menu', { paths })
+export const openTerminal = (path: string) => invoke<void>('open_terminal', { path })
+export const renameEntry =(path: string, newName: string) =>
   invoke<string>('rename_entry', { path, newName })
+/**
+ * 一括名前変更の規則。拡張子は常にそのまま残る。
+ * `template` の `{name}` は置換後の元の名前、`{n}` は連番（`start` から、`digits` 桁で 0 埋め）。
+ */
+export type RenameRule = {
+  find: string
+  replace: string
+  matchCase: boolean
+  template: string
+  start: number
+  digits: number
+  case: '' | 'lower' | 'upper'
+}
+export const defaultRenameRule = (): RenameRule => ({
+  find: '',
+  replace: '',
+  matchCase: false,
+  template: '{name}',
+  start: 1,
+  digits: 2,
+  case: '',
+})
+export type RenamePreview = {
+  path: string
+  name: string
+  newName: string
+  status: 'ok' | 'unchanged' | 'invalid' | 'conflict'
+  message: string
+}
+/** 規則を当てた結果の一覧。実際には何も変えない。`paths` の並び順で連番を振る。 */
+export const planBulkRename = (paths: string[], rule: RenameRule) =>
+  invoke<RenamePreview[]>('plan_bulk_rename', { paths, rule })
+/** 規則を当てて名前を変える。1件でも問題があれば何も変えない。戻り値は変更した件数。 */
+export const applyBulkRename = (paths: string[], rule: RenameRule) =>
+  invoke<number>('apply_bulk_rename', { paths, rule })
+
 /** ゴミ箱へ送る。完全削除は用意しない（誤操作で戻せないのを避けるため）。 */
 export const trashEntries = (paths: string[]) => invoke<number>('trash_entries', { paths })
+
+/** フォルダの中身の合計。大きな木では時間がかかる（別スレッドで数える）。 */
+export const measureFolder = (path: string) =>
+  invoke<{ files: number; bytes: number }>('measure_folder', { path })
 
 /** アドレスバーの補完候補。 */
 export const completePath = (input: string, showHidden = false) =>
@@ -115,7 +217,6 @@ export type ClipboardData = { paths: string[]; cut: boolean }
 export const setClipboard = (paths: string[], cut: boolean) =>
   invoke<void>('set_clipboard', { paths, cut })
 export const getClipboard = () => invoke<ClipboardData>('get_clipboard')
-export const pasteClipboard = (dest: string) => invoke<string[]>('paste_clipboard', { dest })
 
 export type ProgressEvent = {
   id: number
@@ -161,9 +262,23 @@ export type DoneEvent = {
   completedSources: string[]
 }
 
+/**
+ * 転送先に同名があった時の扱い。
+ * rename は `name (2)` で両方残す。overwrite は既存をゴミ箱へ送ってから置く。skip は転送しない。
+ */
+export type ConflictPolicy = 'rename' | 'overwrite' | 'skip'
+
+/** 転送先で名前が衝突する項目名。空なら選択肢を出さずに転送してよい。 */
+export const transferConflicts = (paths: string[], dest: string) =>
+  invoke<string[]>('transfer_conflicts', { paths, dest })
+
 /** 別スレッドでコピー/移動を始める。戻り値は中断に使う ID。 */
-export const startTransfer = (paths: string[], dest: string, moveFiles: boolean) =>
-  invoke<number>('start_transfer', { paths, dest, moveFiles })
+export const startTransfer = (
+  paths: string[],
+  dest: string,
+  moveFiles: boolean,
+  conflict: ConflictPolicy = 'rename',
+) => invoke<number>('start_transfer', { paths, dest, moveFiles, conflict })
 export const cancelTransfer = (id: number) => invoke<void>('cancel_transfer', { id })
 export const TRANSFER_PROGRESS = 'transfer-progress'
 export const TRANSFER_DONE = 'transfer-done'
@@ -206,6 +321,8 @@ export const SEARCH_DONE = 'search-done'
 export const startSearch = (id: string, roots: string[]) => invoke<void>('start_search', { id, roots })
 export const filterSearch = (id: string, requestId: number, options: SearchFilterOptions) =>
   invoke<void>('filter_search', { id, requestId, options })
+/** 表示中の結果が実在するか確かめ直す。移動・削除された項目は結果から消える。 */
+export const recheckSearch = (id: string) => invoke<void>('recheck_search', { id })
 export const cancelSearch = (id: string) => invoke<void>('cancel_search', { id })
 export const pauseSearch = (id: string) => invoke<void>('pause_search', { id })
 export const resumeSearch = (id: string) => invoke<void>('resume_search', { id })
@@ -226,6 +343,8 @@ export type Settings = {
   restoreSession: boolean
   overlayHotkey: string
   shortcuts: Record<string, string>
+  /** 検索で中へ潜らないフォルダ名（大文字小文字は区別しない）。 */
+  searchExcludes: string[]
 }
 
 export const getSettings = () => invoke<Settings>('get_settings')
@@ -257,16 +376,31 @@ export type SavedSearchState = {
 export type SavedPaneState = {
   path: string
   kind?: PaneKind
+  /** 固定中のペインは移動しない。移動しようとした先は別のペインで開く。 */
+  pinned?: boolean
   search?: SavedSearchState
   sidebar?: SavedSidebarState
   selectedEntry?: string
   scrollTop?: number
 }
-export type SavedTabState = { panes: SavedPaneState[]; activePaneIndex: number; trayPaths?: string[] }
+/** 目的別に分けた収集トレイ。 */
+export type SavedTray = { name: string; paths: string[] }
+export type SavedTabState = {
+  panes: SavedPaneState[]
+  activePaneIndex: number
+  /** 選んでいるトレイの中身。複数トレイより前の保存データとの互換のため残す。 */
+  trayPaths?: string[]
+  /** 名前付きの全トレイ。無ければ trayPaths を1つのトレイとして扱う。 */
+  trays?: SavedTray[]
+  activeTrayIndex?: number
+}
+/** トレイ切り替え欄に出す概要。 */
+export type TraySummary = { id: number; name: string; count: number }
 export type SessionState = { tabs: SavedTabState[]; activeTabIndex: number }
 
-export const saveSessionState = (session: SessionState) =>
-  invoke<void>('save_session_state', { session })
+/** どの窓も保存する。次回起動時は最後に閉じた窓のセッションが main に復元される。 */
+export const saveSessionState = (label: string, session: SessionState) =>
+  invoke<void>('save_session_state', { label, session })
 export const getSessionState = () => invoke<SessionState | null>('get_session_state')
 
 export type UndoState = { available: boolean; label: string }
@@ -292,9 +426,6 @@ export const dragPreviewIcon = () => invoke<string>('drag_preview_icon')
  */
 export const overlayHotkey = () =>
   invoke<string>('overlay_hotkey').then((s) => s.replace('CmdOrCtrl', 'Ctrl'))
-
-export const acceptDropped = (paths: string[], dest: string, moveFiles: boolean) =>
-  invoke<string[]>('accept_dropped', { paths, dest, moveFiles })
 
 export const openWindow = (path: string) => invoke<string>('open_window', { path })
 export const listWindows = () => invoke<WindowInfo[]>('list_windows')

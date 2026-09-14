@@ -1,12 +1,13 @@
 [package]
-name = "app"
+name = "trayce"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Trayce - a multi-window file manager"
+authors = ["hinatahugu29"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.77.2"
+# File::try_lock（二重起動の防止）に 1.89 が要る。
+rust-version = "1.89"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -32,3 +33,7 @@ tauri-plugin-opener = "2.5.4"
 # Windows では ReadDirectoryChangesW を使う。既定の features で足りる。
 notify = "8.2.0"
 zip = { version = "4.2.0", default-features = false, features = ["deflate"] }
+
+[target."cfg(windows)".dependencies]
+clipboard-win = "5"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_System_Com"] }

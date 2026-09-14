@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, "codex/**"]
+  pull_request:
+
+jobs:
+  check:
+    # 対象は Windows 中心（ゴミ箱・ファイル属性・パス表記のテストが Windows 前提）。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Svelte / TypeScript diagnostics
+        run: npm run check
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Production web build
+        run: npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Whitespace check
+        shell: bash
+        run: git diff --check HEAD~1 HEAD || git diff --check

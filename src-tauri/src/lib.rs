@@ -1,6 +1,9 @@
 mod archive;
 mod fs_ops;
+mod instance;
+mod rename;
 mod search;
+mod shell;
 mod store;
 mod transfer;
 mod undo;
@@ -57,6 +60,13 @@ fn overlay_hotkey(app: tauri::AppHandle) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // 二重起動を防ぐ。窓もホットキーも作る前に判定する。
+  // 2つ目の起動は、既存の窓を前面に出す操作として扱って終了する。
+  let instance = match instance::acquire() {
+    instance::Acquire::Second => return,
+    instance::Acquire::First(guard) => guard,
+  };
+
   tauri::Builder::default()
     .manage(windows::Registry::default())
     .manage(store::Store::default())
@@ -65,9 +75,14 @@ pub fn run() {
     .manage(search::Searches::default())
     .manage(transfer::Transfers::default())
     .manage(undo::UndoStack::default())
-    .setup(|app| {
+    .setup(move |app| {
       // お気に入りと履歴をディスクから復元する。
       app.state::<store::Store>().attach(app.handle());
+
+      if let Some(guard) = instance {
+        let handle = app.handle().clone();
+        instance::serve(guard, move || windows::focus_most_recent_window(&handle));
+      }
 
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -112,7 +127,8 @@ pub fn run() {
       if let tauri::WindowEvent::Destroyed = event {
         let app = window.app_handle();
         let label = window.label().to_string();
-        app.state::<windows::Registry>();
+        // 最後に閉じた窓を次回起動時に復元する。unregister が最後の窓で終了させるので、その前に行う。
+        app.state::<store::Store>().promote_window_session(&label);
         windows::unregister_window(app.clone(), label);
       }
     })
@@ -126,21 +142,29 @@ pub fn run() {
       fs_ops::list_dir,
       fs_ops::list_subdirs,
       fs_ops::drives,
-      fs_ops::accept_dropped,
       fs_ops::create_folder,
+      fs_ops::create_file,
+      fs_ops::open_terminal,
+      shell::open_with,
+      shell::show_properties,
+      shell::show_shell_menu,
       fs_ops::rename_entry,
+      rename::plan_bulk_rename,
+      rename::apply_bulk_rename,
       fs_ops::trash_entries,
       fs_ops::complete_path,
       fs_ops::preview_entry,
+      fs_ops::measure_folder,
       fs_ops::set_clipboard,
       fs_ops::get_clipboard,
-      fs_ops::paste_clipboard,
       watch::watch_dir,
       watch::unwatch_dir,
+      fs_ops::transfer_conflicts,
       transfer::start_transfer,
       transfer::cancel_transfer,
       search::start_search,
       search::filter_search,
+      search::recheck_search,
       search::cancel_search,
       search::pause_search,
       search::resume_search,
@@ -185,6 +209,12 @@ pub fn run() {
       log_ui,
       overlay_hotkey
     ])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|app, event| {
+      // 保存は間引いて書いているので、終了時に未書き込みの変更を書き切る。
+      if let tauri::RunEvent::Exit = event {
+        app.state::<store::Store>().flush();
+      }
+    });
 }

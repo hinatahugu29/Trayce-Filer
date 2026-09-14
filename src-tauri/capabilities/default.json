@@ -16,7 +16,10 @@
     "drag:default",
     "global-shortcut:default",
     "opener:default",
-    "opener:allow-open-path",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "**" }]
+    },
     "opener:allow-reveal-item-in-dir"
   ]
 }

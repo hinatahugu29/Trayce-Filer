@@ -1,0 +1,13 @@
+{
+  "description": "検索・絞り込みの表記ゆれ規則。Rust の search::normalize と TypeScript の foldForSearch が同じ結果を返すことを、この1つの表で確かめる。",
+  "normalize": [
+    { "input": "ＡＢＣ　ｘｙｚ１２３", "expected": "abc xyz123", "note": "全角英数と全角空白" },
+    { "input": "Report.PDF", "expected": "report.pdf", "note": "英字の大文字小文字" },
+    { "input": "ｶﾞｲﾄﾞ ﾊﾟﾝﾌ ﾃﾞｰﾀ ｳﾞｧ", "expected": "ガイド パンフ データ ヴァ", "note": "半角カナと濁点・半濁点の合成" },
+    { "input": "ﾂﾞ ﾄﾞ ﾁﾞ ﾎﾟ", "expected": "ヅ ド ヂ ポ", "note": "ッを挟む範囲とハ行" },
+    { "input": "ｱﾞ", "expected": "ア゛", "note": "合成できない濁点は独立した記号として残す" },
+    { "input": "ﾞｶ", "expected": "゛カ", "note": "先頭の濁点は合成先が無い" },
+    { "input": "！－｜", "expected": "!-|", "note": "演算子として働く全角記号" },
+    { "input": "日本語ファイル", "expected": "日本語ファイル", "note": "対象外の文字は変えない" }
+  ]
+}

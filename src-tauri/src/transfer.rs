@@ -55,7 +55,10 @@ pub fn start_transfer(
   paths: Vec<String>,
   dest: String,
   move_files: bool,
+  // 省略時（古い呼び出し）は従来どおり別名で置く。
+  conflict: Option<super::fs_ops::ConflictPolicy>,
 ) -> u64 {
+  let conflict = conflict.unwrap_or_default();
   let id = {
     let state = app.state::<Transfers>();
     let mut next = state.next_id.lock().unwrap();
@@ -83,7 +86,7 @@ pub fn start_transfer(
       eta_secs: None,
       current: String::new(),
     });
-    let (files_total, bytes_total) = super::fs_ops::scan_total_pub(&paths);
+    let (files_total, bytes_total) = super::fs_ops::scan_total_pub(&paths, &dest, move_files, conflict);
 
     let start_time = Instant::now();
     let mut last_time = Instant::now() - Duration::from_secs(1);
@@ -127,21 +130,23 @@ pub fn start_transfer(
     };
 
     let result =
-      super::fs_ops::transfer_pub(&paths, &dest, move_files, &cancel, &mut on_progress);
+      super::fs_ops::transfer_pub(&paths, &dest, move_files, conflict, &cancel, &mut on_progress);
 
     let cancelled = cancel.load(Ordering::Relaxed);
     let (created, error, completed_sources) = match result {
-      Ok(pairs) => {
+      Ok((pairs, replaced)) => {
         let count = pairs.len();
         let completed_sources = pairs
           .iter()
           .map(|(source, _)| source.to_string_lossy().to_string())
           .collect();
         // 中断で0件だった場合、undo に積む意味が無い。
-        if count > 0 {
+        // 上書きで既存をゴミ箱へ送っていれば、転送が0件でも戻す対象がある。
+        if count > 0 || !replaced.is_empty() {
           app.state::<crate::undo::UndoStack>().push(crate::undo::UndoAction::Transfer {
             pairs,
             was_move: move_files,
+            replaced,
           });
         }
         (count, None, completed_sources)

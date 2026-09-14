@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 /// 履歴の保持件数。多すぎると探すのに探す羽目になるので、この辺で頭打ちにする。
@@ -51,6 +53,14 @@ pub struct Settings {
   /// アプリ内ショートカット。`アクション名 -> キー表記` の対応。
   /// 未設定のアクションは組み込みの既定値を使う。
   pub shortcuts: std::collections::HashMap<String, String>,
+  /// 検索で中へ潜らないフォルダ名（大文字小文字は区別しない）。
+  /// 中身が膨大で探す対象になりにくい場所を最初から読まず、読み込みを速くし結果の雑音を減らす。
+  pub search_excludes: Vec<String>,
+}
+
+/// 検索で既定で除くフォルダ名。
+pub fn default_search_excludes() -> Vec<String> {
+  [".git", "node_modules", "$RECYCLE.BIN", "System Volume Information"].into_iter().map(String::from).collect()
 }
 
 impl Default for Settings {
@@ -66,6 +76,7 @@ impl Default for Settings {
       restore_session: true,
       overlay_hotkey: "CmdOrCtrl+Shift+Space".into(),
       shortcuts: std::collections::HashMap::new(),
+      search_excludes: default_search_excludes(),
     }
   }
 }
@@ -115,6 +126,9 @@ pub struct SavedPaneState {
   pub path: String,
   #[serde(default)]
   pub kind: PaneKind,
+  /// 転送先として固定し、移動させないペイン。古いセッションには無いので既定は false。
+  #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+  pub pinned: bool,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub search: Option<SavedSearchState>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,8 +154,23 @@ pub struct SavedSidebarState {
 pub struct SavedTabState {
   pub panes: Vec<SavedPaneState>,
   pub active_pane_index: usize,
+  /// 選んでいるトレイの中身。複数トレイより前の保存データとの互換のため残す。
   #[serde(default)]
   pub tray_paths: Vec<String>,
+  /// 名前付きの全トレイ。無ければ `tray_paths` を1つのトレイとして扱う。
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub trays: Vec<SavedTray>,
+  #[serde(default)]
+  pub active_tray_index: usize,
+}
+
+/// 「納品用」「確認待ち」のように目的別に分けた収集トレイ。
+#[derive(Clone, Serialize, Deserialize, Default, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedTray {
+  pub name: String,
+  #[serde(default)]
+  pub paths: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -170,7 +199,18 @@ pub struct Store {
   state: Mutex<State>,
   /// 保存先。setup で決まるまでは None。
   file: Mutex<Option<PathBuf>>,
+  /// 書き込み係のスレッドへ「保存して」と伝える口。attach 前（テスト等）は None で、その場で書く。
+  saver: Mutex<Option<Sender<()>>>,
+  /// 書き込み係と終了時の flush が同じ一時ファイルを同時に触らないようにする。
+  write_lock: Mutex<()>,
+  /// 開いている窓ごとの直近のセッション。窓が閉じた時に `last_session` へ昇格させる。
+  /// どの窓も保存するので、単に最後に保存された内容ではなく「最後に閉じた窓」を残すために分けて持つ。
+  window_sessions: Mutex<std::collections::HashMap<String, SessionState>>,
 }
+
+/// 保存要求がこの時間途切れたら書く。
+/// セッション状態はタブやペインが少し変わるたびに届くので、毎回ディスクへ書かない。
+const SAVE_DEBOUNCE: Duration = Duration::from_millis(300);
 
 fn now_ms() -> u128 {
   std::time::SystemTime::now()
@@ -258,9 +298,40 @@ impl Store {
       }
     }
     *self.file.lock().unwrap() = Some(file);
+
+    let (tx, rx) = channel::<()>();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+      while rx.recv().is_ok() {
+        // 続けて届く要求はまとめて1回にする。
+        loop {
+          match rx.recv_timeout(SAVE_DEBOUNCE) {
+            Ok(()) => continue,
+            Err(RecvTimeoutError::Timeout) => break,
+            Err(RecvTimeoutError::Disconnected) => break,
+          }
+        }
+        handle.state::<Store>().save_now();
+      }
+    });
+    *self.saver.lock().unwrap() = Some(tx);
   }
 
-  fn save(&self) {
+  /// 保存を予約する。書き込み係がいなければその場で書く。
+  fn request_save(&self) {
+    let sent = self.saver.lock().unwrap().as_ref().map(|tx| tx.send(()).is_ok()).unwrap_or(false);
+    if !sent {
+      self.save_now();
+    }
+  }
+
+  /// 予約を待たずに書く。終了時に呼び、直前の変更を取りこぼさない。
+  pub fn flush(&self) {
+    self.save_now();
+  }
+
+  fn save_now(&self) {
+    let _writing = self.write_lock.lock().unwrap_or_else(|value| value.into_inner());
     let Some(file) = self.file.lock().unwrap().clone() else { return };
     let state = self.state.lock().unwrap().clone();
     let Ok(text) = serde_json::to_string_pretty(&state) else { return };
@@ -277,8 +348,28 @@ impl Store {
 
   fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
     let out = f(&mut self.state.lock().unwrap());
-    self.save();
+    self.request_save();
     out
+  }
+
+  /// 窓のセッションを覚える。落ちた時にも直近が残るよう `last_session` も更新する。
+  fn record_window_session(&self, label: &str, session: SessionState) {
+    self.window_sessions.lock().unwrap().insert(label.to_string(), session.clone());
+    self.with(|s| s.last_session = Some(session));
+  }
+
+  /// 閉じた窓のセッションを次回起動時の復元対象にする。
+  ///
+  /// 窓は1枚ずつ閉じられ、最後に閉じた窓がここを最後に通る。
+  /// 別の窓がその後に保存していても、閉じた順が優先される。
+  pub fn promote_window_session(&self, label: &str) {
+    let Some(session) = self.window_sessions.lock().unwrap().remove(label) else { return };
+    self.with(|s| s.last_session = Some(session));
+  }
+
+  /// 検索で除くフォルダ名。検索の開始時に読む（設定を変えたら次の読み込みから効く）。
+  pub fn search_excludes(&self) -> Vec<String> {
+    self.state.lock().unwrap().settings.search_excludes.clone()
   }
 
   /// 設定されたオーバーレイのホットキー。
@@ -378,9 +469,10 @@ pub fn reset_settings(app: AppHandle) -> Settings {
 }
 
 /// セッション状態（直前に開いていたタブとペイン）を保存する。
+/// `label` はその窓。最後に閉じた窓のセッションが次回起動時に復元される。
 #[tauri::command]
-pub fn save_session_state(app: AppHandle, session: SessionState) {
-  app.state::<Store>().with(|s| s.last_session = Some(session));
+pub fn save_session_state(app: AppHandle, label: String, session: SessionState) {
+  app.state::<Store>().record_window_session(&label, session);
 }
 
 /// 保存されているセッション状態を取得する。
@@ -496,6 +588,46 @@ mod tests {
     assert_eq!(s.favorites, vec![r"C:\a".to_string()]);
   }
 
+  fn session_at(path: &str) -> SessionState {
+    SessionState {
+      tabs: vec![SavedTabState {
+        panes: vec![SavedPaneState { path: path.into(), ..Default::default() }],
+        ..Default::default()
+      }],
+      active_tab_index: 0,
+    }
+  }
+
+  fn restored_path(store: &Store) -> String {
+    store.state.lock().unwrap().last_session.as_ref().unwrap().tabs[0].panes[0].path.clone()
+  }
+
+  /// 最後に保存した窓ではなく、最後に閉じた窓が次回の復元対象になる。
+  #[test]
+  fn the_last_closed_window_wins_over_the_last_saved_one() {
+    let store = Store::default();
+    store.record_window_session("main", session_at(r"C:\main"));
+    store.record_window_session("filer-1", session_at(r"D:\detached"));
+    // 後から main が保存し直す（別の窓で作業していた）。
+    store.record_window_session("main", session_at(r"C:\main-later"));
+    assert_eq!(restored_path(&store), r"C:\main-later", "落ちた時に備えて直近は常に残す");
+
+    // main を先に閉じ、切り離した窓を最後に閉じる。
+    store.promote_window_session("main");
+    store.promote_window_session("filer-1");
+    assert_eq!(restored_path(&store), r"D:\detached");
+  }
+
+  /// セッションを保存しない窓（オーバーレイ等）が閉じても、復元対象を消さない。
+  #[test]
+  fn closing_a_window_without_a_session_keeps_the_previous_one() {
+    let store = Store::default();
+    store.record_window_session("main", session_at(r"C:\main"));
+    store.promote_window_session("main");
+    store.promote_window_session("overlay");
+    assert_eq!(restored_path(&store), r"C:\main");
+  }
+
   #[test]
   fn session_without_tray_restores_an_empty_tray() {
     let session: SessionState = serde_json::from_str(
@@ -508,6 +640,39 @@ mod tests {
     assert_eq!(session.tabs[0].panes[0].kind, PaneKind::Directory);
     assert!(session.tabs[0].panes[0].search.is_none());
     assert!(session.tabs[0].panes[0].sidebar.is_none());
+  }
+
+  #[test]
+  fn named_trays_round_trip_and_older_sessions_keep_a_single_tray() {
+    let session: SessionState = serde_json::from_str(
+      r#"{"tabs":[{"panes":[{"path":"C:\\w"}],"activePaneIndex":0,"trayPaths":["C:\\b"],"trays":[{"name":"納品用","paths":["C:\\a"]},{"name":"確認待ち","paths":["C:\\b"]}],"activeTrayIndex":1}],"activeTabIndex":0}"#,
+    )
+    .unwrap();
+    let tab = &session.tabs[0];
+    assert_eq!(tab.trays.len(), 2);
+    assert_eq!(tab.trays[0], SavedTray { name: "納品用".into(), paths: vec![r"C:\a".into()] });
+    assert_eq!(tab.active_tray_index, 1);
+    let encoded = serde_json::to_string(&session).unwrap();
+    assert!(encoded.contains(r#""activeTrayIndex":1"#) && encoded.contains("確認待ち"));
+
+    let older: SessionState =
+      serde_json::from_str(r#"{"tabs":[{"panes":[],"activePaneIndex":0,"trayPaths":["C:\\x"]}],"activeTabIndex":0}"#).unwrap();
+    assert!(older.tabs[0].trays.is_empty(), "古い形式は trays を持たない（フロントが trayPaths から1つ作る）");
+    assert_eq!(older.tabs[0].tray_paths, [r"C:\x"]);
+    assert_eq!(older.tabs[0].active_tray_index, 0);
+  }
+
+  #[test]
+  fn pinned_panes_round_trip_and_default_to_unpinned() {
+    let session: SessionState = serde_json::from_str(
+      r#"{"tabs":[{"panes":[{"path":"C:\\dest","pinned":true},{"path":"C:\\browse"}],"activePaneIndex":1}],"activeTabIndex":0}"#,
+    )
+    .unwrap();
+    assert!(session.tabs[0].panes[0].pinned);
+    assert!(!session.tabs[0].panes[1].pinned, "古いセッションや未指定は固定しない");
+
+    let encoded = serde_json::to_string(&session).unwrap();
+    assert_eq!(encoded.matches("pinned").count(), 1, "固定していないペインには書かない");
   }
 
   #[test]
@@ -574,6 +739,16 @@ mod tests {
     assert!(s.settings.show_sidebar);
     assert!(!s.settings.show_preview);
     assert_eq!(s.settings.sort_key, "name");
+  }
+
+  /// 除外設定を追加する前の設定でも、既定の除外が効くこと。空にした利用者の選択は保つこと。
+  #[test]
+  fn search_excludes_default_for_older_settings_and_respect_an_empty_choice() {
+    let older: State = serde_json::from_str(r#"{"settings":{"showHidden":true}}"#).unwrap();
+    assert_eq!(older.settings.search_excludes, default_search_excludes());
+
+    let cleared: State = serde_json::from_str(r#"{"settings":{"searchExcludes":[]}}"#).unwrap();
+    assert!(cleared.settings.search_excludes.is_empty(), "除外しないと決めた設定を既定で上書きしない");
   }
 
   /// 設定項目を後から増やしても、一部しか無い JSON が読めること。

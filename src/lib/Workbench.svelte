@@ -6,6 +6,12 @@
   import { splitPath, pathHue, elideLeft, formatSize, joinPath } from './api'
   import type { WindowInfo, WindowPaneInfo, Entry } from './api'
   import TransferBar from './TransferBar.svelte'
+  import ConflictDialog from './ConflictDialog.svelte'
+  import { createConflictPrompt, type ConflictRequest } from './conflicts'
+
+  /** 衝突の確認ダイアログ。転送先に同名があれば選んでもらう。 */
+  let conflictRequest: ConflictRequest | null = null
+  const conflicts = createConflictPrompt((request) => (conflictRequest = request))
 
   export let windows: WindowInfo[] = []
   export let pinned: boolean = false
@@ -227,7 +233,7 @@
     ev.preventDefault()
     ev.stopPropagation()
     dropTargetKey = null
-    if (activeTransfer) {
+    if (activeTransfer || conflicts.open) {
       onNote('転送中です。完了または中断後にもう一度操作してください')
       return
     }
@@ -245,10 +251,15 @@
     const moveFiles = dragged.fromTray ? ev.shiftKey : !ev.ctrlKey
 
     try {
+      const conflict = await conflicts.ask(srcPaths, targetDir, moveFiles)
+      if (!conflict) {
+        onNote(`${moveFiles ? '移動' : 'コピー'}を取りやめました`)
+        return
+      }
       startingTransfer = true
       earlyProgress = null
       earlyDone = null
-      const id = await api.startTransfer(srcPaths, targetDir, moveFiles)
+      const id = await api.startTransfer(srcPaths, targetDir, moveFiles, conflict)
       activeTransfer = {
         id,
         srcWindowLabel,
@@ -569,6 +580,7 @@
     </div>
   {/if}
   <TransferBar {progress} />
+  <ConflictDialog request={conflictRequest} onChoose={conflicts.choose} />
 </div>
 
 <style>

@@ -119,7 +119,7 @@ pub fn list_subdirs(path: String, show_hidden: Option<bool>) -> Result<Vec<Entry
     .filter(|e| show_hidden || !e.hidden)
     .collect();
 
-  dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+  dirs.sort_by_cached_key(|e| e.name.to_lowercase());
   Ok(dirs)
 }
 
@@ -206,8 +206,14 @@ fn is_hidden(name: &str, meta: Option<&std::fs::Metadata>) -> bool {
 
 /// 並べ替え。同値になった時は必ず名前で決着させ、順序がぶれないようにする。
 /// ぶれると、更新のたびに行が入れ替わって目で追えなくなる。
-fn sort_entries(entries: &mut [Entry], sort: SortSpec) {
-  entries.sort_by(|a, b| {
+///
+/// 比較のたびに `to_lowercase()` すると、数万件で数十万回の文字列確保になる。
+/// 小文字名は1件1回だけ作り、添字を並べ替えてから並びを確定させる。
+fn sort_entries(entries: &mut Vec<Entry>, sort: SortSpec) {
+  let lower: Vec<String> = entries.iter().map(|e| e.name.to_lowercase()).collect();
+  let mut order: Vec<usize> = (0..entries.len()).collect();
+  order.sort_by(|&i, &j| {
+    let (a, b) = (&entries[i], &entries[j]);
     if sort.dirs_first {
       let by_kind = b.is_dir.cmp(&a.is_dir);
       if by_kind != std::cmp::Ordering::Equal {
@@ -225,7 +231,7 @@ fn sort_entries(entries: &mut [Entry], sort: SortSpec) {
     let by_key = if sort.descending { by_key.reverse() } else { by_key };
 
     // 名前は最後の決着役。キーが名前の場合も降順を効かせる。
-    let by_name = a.name.to_lowercase().cmp(&b.name.to_lowercase());
+    let by_name = lower[i].cmp(&lower[j]);
     let by_name = if sort.descending && sort.key == SortKey::Name {
       by_name.reverse()
     } else {
@@ -234,18 +240,40 @@ fn sort_entries(entries: &mut [Entry], sort: SortSpec) {
 
     by_key.then(by_name)
   });
+
+  let mut slots: Vec<Option<Entry>> = std::mem::take(entries).into_iter().map(Some).collect();
+  *entries = order.into_iter().filter_map(|i| slots[i].take()).collect();
 }
 
-/// 落とされたファイル群を `dest` ディレクトリへ取り込む。
-///
-/// `move_files` が false ならコピー。既存ファイルは黙って上書きせず、
-/// `name (2).ext` のように退避名を作る。ファイラで黙って消えるのが一番怖いため。
+/// 転送先に同名の項目があった時の扱い。利用者が転送前に選ぶ。
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConflictPolicy {
+  /// `name (2).ext` のように別名で置く。どちらも残る。
+  #[default]
+  Rename,
+  /// 既存をゴミ箱へ送ってから置く。完全には消さないので、ゴミ箱から戻せる。
+  Overwrite,
+  /// 衝突した項目は転送しない。
+  Skip,
+}
+
+/// 転送先で名前が衝突する項目の名前。転送前に選択肢を出すために使う。
+/// 同じ場所への転送（何もしない）は衝突に数えない。
 #[tauri::command]
-pub fn accept_dropped(paths: Vec<String>, dest: String, move_files: bool) -> Result<Vec<String>, String> {
-  // 進捗も中断も要らない経路。中断しない旗と何もしない通知を渡すだけ。
-  let never = std::sync::atomic::AtomicBool::new(false);
-  let pairs = transfer(&paths, &dest, move_files, &never, &mut |_, _| {})?;
-  Ok(pairs.into_iter().map(|(_, to)| to.to_string_lossy().to_string()).collect())
+pub fn transfer_conflicts(paths: Vec<String>, dest: String) -> Vec<String> {
+  let dest_dir = Path::new(&dest);
+  paths
+    .iter()
+    .filter_map(|p| {
+      let src = Path::new(p);
+      let name = src.file_name()?;
+      if src.parent() == Some(dest_dir) {
+        return None;
+      }
+      dest_dir.join(name).exists().then(|| name.to_string_lossy().to_string())
+    })
+    .collect()
 }
 
 /// 転送の進み具合。
@@ -263,26 +291,80 @@ pub fn transfer_pub(
   paths: &[String],
   dest: &str,
   move_files: bool,
+  conflict: ConflictPolicy,
   cancel: &std::sync::atomic::AtomicBool,
   on_progress: &mut dyn FnMut(&Progress, &str),
-) -> Result<Vec<(PathBuf, PathBuf)>, String> {
-  transfer(paths, dest, move_files, cancel, on_progress)
+) -> Result<(Vec<(PathBuf, PathBuf)>, Vec<PathBuf>), String> {
+  // 上書きでゴミ箱へ送った既存項目の元の場所。undo でゴミ箱から戻すために返す。
+  let replaced = std::cell::RefCell::new(Vec::new());
+  let to_trash = |path: &Path| {
+    trash::delete(path).map_err(|e| format!("{} をゴミ箱へ送れません: {e}", path.display()))?;
+    replaced.borrow_mut().push(path.to_path_buf());
+    Ok(())
+  };
+  let pairs = transfer_with_policy(paths, dest, move_files, conflict, &to_trash, cancel, on_progress)?;
+  Ok((pairs, replaced.into_inner()))
 }
 
 /// 総量の事前集計。戻り値は (ファイル数, バイト数)。
-pub fn scan_total_pub(paths: &[String]) -> (u64, u64) {
-  scan_total(paths)
+///
+/// 次の項目は中身を書かないので数えない。数えると進捗が 100% に届かない。
+/// - 移動で `dest` と同じボリュームにあるもの（rename で済む）
+/// - 衝突時にスキップを選び、転送先に同名があるもの
+pub fn scan_total_pub(paths: &[String], dest: &str, move_files: bool, conflict: ConflictPolicy) -> (u64, u64) {
+  let dest_dir = Path::new(dest);
+  let copied: Vec<String> = paths
+    .iter()
+    .filter(|p| {
+      let src = Path::new(p);
+      let renamed = move_files && same_volume(src, dest_dir);
+      let skipped = conflict == ConflictPolicy::Skip
+        && src.parent() != Some(dest_dir)
+        && src.file_name().is_some_and(|name| dest_dir.join(name).exists());
+      !renamed && !skipped
+    })
+    .cloned()
+    .collect();
+  scan_total(&copied)
 }
 
-/// コピー / 移動の本体。
+/// 2つのパスが同じドライブ（`C:` や `\\server\share`）にあるか。
+/// 判定できない場合は false にして、数え漏れより数え過ぎに倒す。
+fn same_volume(a: &Path, b: &Path) -> bool {
+  use std::path::Component;
+  match (a.components().next(), b.components().next()) {
+    (Some(Component::Prefix(x)), Some(Component::Prefix(y))) => {
+      x.as_os_str().to_string_lossy().to_lowercase() == y.as_os_str().to_string_lossy().to_lowercase()
+    }
+    _ => false,
+  }
+}
+
+/// コピー / 移動の本体（テスト用の入口。衝突は常に別名で置く）。
 ///
 /// `cancel` が立ったら速やかに諦める。`on_progress` は
 /// 「今どこまで進んだか」と「今どのファイルか」を受け取る。
 /// 戻り値は (元のパス, 作られたパス) のペア。
+#[cfg(test)]
 fn transfer(
   paths: &[String],
   dest: &str,
   move_files: bool,
+  cancel: &std::sync::atomic::AtomicBool,
+  on_progress: &mut dyn FnMut(&Progress, &str),
+) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+  let never = |_: &Path| Err("別名で置くので既存を退避することはありません".to_string());
+  transfer_with_policy(paths, dest, move_files, ConflictPolicy::Rename, &never, cancel, on_progress)
+}
+
+/// `discard` は上書き時に既存を退かす手段。本番はゴミ箱、テストは通常の削除を渡す
+/// （テストで利用者のゴミ箱を汚さないため）。
+fn transfer_with_policy(
+  paths: &[String],
+  dest: &str,
+  move_files: bool,
+  conflict: ConflictPolicy,
+  discard: &dyn Fn(&Path) -> Result<(), String>,
   cancel: &std::sync::atomic::AtomicBool,
   on_progress: &mut dyn FnMut(&Progress, &str),
 ) -> Result<Vec<(PathBuf, PathBuf)>, String> {
@@ -314,28 +396,60 @@ fn transfer(
       return Err(format!("{p} を自身の下へは移動できません"));
     }
 
-    let target = unique_target(dest_dir, Path::new(name));
+    let direct = dest_dir.join(name);
+    let target = if !direct.exists() {
+      direct
+    } else {
+      match conflict {
+        ConflictPolicy::Rename => unique_target(dest_dir, Path::new(name))?,
+        // 転送しなかった項目は完了に数えない（トレイからも外さない）。
+        ConflictPolicy::Skip => continue,
+        ConflictPolicy::Overwrite => {
+          // 既存が転送元を含んでいると、既存を退かした時点で転送元ごと消える。
+          if src.starts_with(&direct) {
+            return Err(format!("{p} を含む {} は上書きできません", direct.display()));
+          }
+          discard(&direct)?;
+          direct
+        }
+      }
+    };
+
+    // 同一ボリューム内の移動は、ファイルでもフォルダでも rename 1回で済む。
+    // 以前はファイルしか試しておらず、数GBのフォルダを同じドライブ内で動かすだけで
+    // 全コピー＋全削除になっていた。跨ぐと失敗するので下のコピー+削除に落とす。
+    // 総量の集計（scan_total）もこの経路の項目は数えないので、進捗には加えない。
+    if move_files && std::fs::rename(&src, &target).is_ok() {
+      on_progress(&progress, &src.to_string_lossy());
+      done.push((src, target));
+      continue;
+    }
 
     if src.is_dir() {
       // ディレクトリの再帰コピーは std に無いので自前。
-      copy_dir_all(&src, &target, cancel, &mut progress, on_progress)
+      let completed = copy_dir_all(&src, &target, cancel, &mut progress, on_progress)
         .map_err(|e| format!("{p}: {e}"))?;
-      if move_files && !cancel.load(Ordering::Relaxed) {
+      if !completed {
+        // 途中まで作ったフォルダは、揃っているように見えて中身が欠けている。
+        // target は unique_target で新しく作った場所なので、丸ごと消してよい。
+        let _ = std::fs::remove_dir_all(&target);
+        break;
+      }
+      if move_files {
         std::fs::remove_dir_all(&src).map_err(|e| format!("{p} の削除に失敗: {e}"))?;
       }
-    } else if move_files && std::fs::rename(&src, &target).is_ok() {
-      // 同一ボリューム内なら rename が速い。跨ぐと失敗するのでコピー+削除に落とす。
-      progress.files_done += 1;
-      progress.bytes_done += src.metadata().map(|m| m.len()).unwrap_or(0);
-      on_progress(&progress, &src.to_string_lossy());
     } else {
-      copy_file(&src, &target, cancel, &mut progress, on_progress)
+      let completed = copy_file(&src, &target, cancel, &mut progress, on_progress)
         .map_err(|e| format!("{p}: {e}"))?;
-      if move_files && !cancel.load(Ordering::Relaxed) {
+      if !completed {
+        break;
+      }
+      if move_files {
         std::fs::remove_file(&src).map_err(|e| format!("{p} の削除に失敗: {e}"))?;
       }
     }
 
+    // 中断された項目はここへ来ない。トレイや undo は「実際に終わったもの」だけを受け取る。
     done.push((src, target));
   }
   Ok(done)
@@ -345,13 +459,16 @@ fn transfer(
 ///
 /// `std::fs::copy` を使わないのは、途中経過が取れず中断もできないため。
 /// 数GBのファイルで固まって見えるのを避ける。
+///
+/// 戻り値は最後まで書けたか。中断時は書きかけを消して `Ok(false)` を返す
+/// （`Ok(())` だと呼び出し側が完了と区別できず、トレイから項目が消えていた）。
 fn copy_file(
   src: &Path,
   dst: &Path,
   cancel: &std::sync::atomic::AtomicBool,
   progress: &mut Progress,
   on_progress: &mut dyn FnMut(&Progress, &str),
-) -> std::io::Result<()> {
+) -> std::io::Result<bool> {
   use std::io::{Read, Write};
   use std::sync::atomic::Ordering;
 
@@ -368,7 +485,7 @@ fn copy_file(
       // という最悪の状態になる。消してから抜ける。
       drop(writer);
       let _ = std::fs::remove_file(dst);
-      return Ok(());
+      return Ok(false);
     }
 
     let n = reader.read(&mut buf)?;
@@ -381,9 +498,14 @@ fn copy_file(
   }
 
   writer.flush()?;
+  // 自前コピーは更新日時を引き継がない（std::fs::copy / CopyFileEx は引き継ぐ）。
+  // 「さっきいじったやつ」を日時で探すファイラなので、コピーで日時が今に化けるのは困る。
+  if let Ok(modified) = reader.metadata().and_then(|meta| meta.modified()) {
+    let _ = writer.set_modified(modified);
+  }
   progress.files_done += 1;
   on_progress(progress, &label);
-  Ok(())
+  Ok(true)
 }
 
 /// 転送前に総量を数える。進捗の分母を出すために要る。
@@ -391,15 +513,19 @@ fn copy_file(
 /// この走査自体が大きな木では時間を食うので、呼び出し側は
 /// 「集計中」を見せてから始める。
 fn scan_total(paths: &[String]) -> (u64, u64) {
+  // リンクは辿らない。ジャンクションが親を指していると無限に潜り、
+  // 別の場所を指していると転送しない量まで分母に入る。
+  // copy_dir_all も DirEntry::file_type（辿らない）で判定しているので揃える。
   fn walk(p: &Path, files: &mut u64, bytes: &mut u64) {
-    if p.is_dir() {
+    let Ok(meta) = std::fs::symlink_metadata(p) else { return };
+    if meta.is_dir() {
       let Ok(read) = std::fs::read_dir(p) else { return };
       for e in read.flatten() {
         walk(&e.path(), files, bytes);
       }
     } else {
       *files += 1;
-      *bytes += p.metadata().map(|m| m.len()).unwrap_or(0);
+      *bytes += meta.len();
     }
   }
 
@@ -411,29 +537,57 @@ fn scan_total(paths: &[String]) -> (u64, u64) {
   (files, bytes)
 }
 
+#[derive(Serialize)]
+pub struct FolderSize {
+  pub files: u64,
+  pub bytes: u64,
+}
+
+/// フォルダの中身の合計（ファイル数とバイト数）。一覧では 0 にしている大きさを、必要な時だけ数える。
+///
+/// 大きな木では時間がかかるので、IPC の処理を塞がないよう別スレッドで数える。
+/// リンクは辿らない（転送の集計と同じ規則）。
+#[tauri::command]
+pub async fn measure_folder(path: String) -> Result<FolderSize, String> {
+  if !Path::new(&path).is_dir() {
+    return Err(format!("{path} はフォルダではありません"));
+  }
+  tauri::async_runtime::spawn_blocking(move || {
+    let (files, bytes) = scan_total(&[path]);
+    FolderSize { files, bytes }
+  })
+  .await
+  .map_err(|e| format!("集計に失敗しました: {e}"))
+}
+
 /// 衝突したら `name (2).ext`, `name (3).ext` … と空きを探す。
-fn unique_target(dir: &Path, name: &Path) -> PathBuf {
+///
+/// 空きが見つからなければエラーにする。以前は元の名前を返しており、
+/// コピーの `File::create` がその既存ファイルを黙って上書きしていた。
+fn unique_target(dir: &Path, name: &Path) -> Result<PathBuf, String> {
+  unique_target_within(dir, name, 10_000)
+}
+
+fn unique_target_within(dir: &Path, name: &Path, limit: u32) -> Result<PathBuf, String> {
   let candidate = dir.join(name);
   if !candidate.exists() {
-    return candidate;
+    return Ok(candidate);
   }
 
   let stem = name.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
   let ext = name.extension().map(|s| s.to_string_lossy().to_string());
 
-  for n in 2..10_000 {
+  for n in 2..limit {
     let filename = match &ext {
       Some(e) => format!("{stem} ({n}).{e}"),
       None => format!("{stem} ({n})"),
     };
     let candidate = dir.join(filename);
     if !candidate.exists() {
-      return candidate;
+      return Ok(candidate);
     }
   }
-  // 現実には到達しない。到達したら上書きせずエラーにしたいが、
-  // 戻り値の型上ここでは元の名前を返し、呼び出し側の copy が失敗する。
-  dir.join(name)
+  Err(format!("{} の空き名が見つかりません", name.display()))
 }
 
 fn copy_dir_all(
@@ -442,32 +596,40 @@ fn copy_dir_all(
   cancel: &std::sync::atomic::AtomicBool,
   progress: &mut Progress,
   on_progress: &mut dyn FnMut(&Progress, &str),
-) -> std::io::Result<()> {
+) -> std::io::Result<bool> {
   use std::sync::atomic::Ordering;
 
   std::fs::create_dir_all(dst)?;
   for entry in std::fs::read_dir(src)? {
     if cancel.load(Ordering::Relaxed) {
-      return Ok(());
+      return Ok(false);
     }
     let entry = entry?;
     let target = dst.join(entry.file_name());
-    if entry.file_type()?.is_dir() {
-      copy_dir_all(&entry.path(), &target, cancel, progress, on_progress)?;
+    let completed = if entry.file_type()?.is_dir() {
+      copy_dir_all(&entry.path(), &target, cancel, progress, on_progress)?
     } else {
-      copy_file(&entry.path(), &target, cancel, progress, on_progress)?;
+      copy_file(&entry.path(), &target, cancel, progress, on_progress)?
+    };
+    if !completed {
+      return Ok(false);
     }
   }
-  Ok(())
+  Ok(true)
 }
 
 /// コピー / 切り取りで保持している内容。
 ///
 /// **アプリ側に持つ**のが肝心。窓が複数あるのがこのファイラの前提なので、
 /// 窓Aで切り取って窓Bで貼る、が成立しないと使い物にならない。
+///
+/// 加えて OS のクリップボードにも同じ内容を載せ、Explorer など他のアプリとも
+/// コピー / 切り取り / 貼り付けを行き来できるようにする。
 #[derive(Default)]
 pub struct Clipboard {
   inner: std::sync::Mutex<ClipboardData>,
+  /// 最後に自分が OS へ書いた時のシーケンス番号。違っていれば他のアプリが書き換えている。
+  os_seq: std::sync::Mutex<Option<u32>>,
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -480,31 +642,94 @@ pub struct ClipboardData {
 #[tauri::command]
 pub fn set_clipboard(app: tauri::AppHandle, paths: Vec<String>, cut: bool) {
   use tauri::Manager;
-  *app.state::<Clipboard>().inner.lock().unwrap() = ClipboardData { paths, cut };
+  let state = app.state::<Clipboard>();
+  {
+    let mut os_seq = state.os_seq.lock().unwrap();
+    // OS 側への反映は失敗してもアプリ内の貼り付けは成り立つので、黙って続ける。
+    if let Some(seq) = os_clipboard::write(&paths, cut, *os_seq) {
+      *os_seq = Some(seq);
+    }
+  }
+  let mut inner = state.inner.lock().unwrap();
+  *inner = ClipboardData { paths, cut };
 }
 
 #[tauri::command]
 pub fn get_clipboard(app: tauri::AppHandle) -> ClipboardData {
   use tauri::Manager;
-  app.state::<Clipboard>().inner.lock().unwrap().clone()
+  let state = app.state::<Clipboard>();
+  let os_seq = *state.os_seq.lock().unwrap();
+  // 自分が書いた後に他のアプリがファイルを載せていれば、そちらが新しい。
+  if let Some(data) = os_clipboard::read_if_changed(os_seq) {
+    return data;
+  }
+  let data = state.inner.lock().unwrap().clone();
+  data
 }
 
-/// クリップボードの内容を `dest` へ貼り付ける。戻り値は作られたパス。
-#[tauri::command]
-pub fn paste_clipboard(app: tauri::AppHandle, dest: String) -> Result<Vec<String>, String> {
-  use tauri::Manager;
-  let data = app.state::<Clipboard>().inner.lock().unwrap().clone();
-  if data.paths.is_empty() {
-    return Ok(Vec::new());
+#[cfg(windows)]
+mod os_clipboard {
+  use super::ClipboardData;
+  use clipboard_win::{raw, Clipboard};
+
+  const CF_HDROP: u32 = 15;
+  /// Explorer がコピーか切り取りかを伝えるのに使う登録形式。
+  const DROP_EFFECT: &str = "Preferred DropEffect";
+  const DROPEFFECT_COPY: u32 = 1;
+  const DROPEFFECT_MOVE: u32 = 2;
+
+  fn current_seq() -> Option<u32> {
+    raw::seq_num().map(|n| n.get())
   }
 
-  let created = accept_dropped(data.paths, dest, data.cut)?;
-
-  // 切り取りは一度しか貼れない。残すと二度目で「元が無い」エラーになる。
-  if data.cut {
-    *app.state::<Clipboard>().inner.lock().unwrap() = ClipboardData::default();
+  /// ファイル一覧を OS へ書く。空なら、自分が書いたものが残っている時だけ消す。
+  /// 戻り値は書き込み後のシーケンス番号。
+  pub fn write(paths: &[String], cut: bool, last_seq: Option<u32>) -> Option<u32> {
+    let _clip = Clipboard::new_attempts(10).ok()?;
+    if paths.is_empty() {
+      // 他のアプリがコピーした内容を、切り取りの消費で巻き添えにしない。
+      if last_seq.is_some() && last_seq == current_seq() {
+        raw::empty().ok()?;
+      }
+      return current_seq();
+    }
+    raw::set_file_list(paths).ok()?;
+    let effect = if cut { DROPEFFECT_MOVE } else { DROPEFFECT_COPY };
+    if let Some(format) = raw::register_format(DROP_EFFECT) {
+      let _ = raw::set_without_clear(format.get(), &effect.to_le_bytes());
+    }
+    current_seq()
   }
-  Ok(created)
+
+  pub fn read_if_changed(last_seq: Option<u32>) -> Option<ClipboardData> {
+    let seq = current_seq()?;
+    if Some(seq) == last_seq || !raw::is_format_avail(CF_HDROP) {
+      return None;
+    }
+    let _clip = Clipboard::new_attempts(10).ok()?;
+    let mut paths = Vec::new();
+    raw::get_file_list(&mut paths).ok()?;
+    let cut = raw::register_format(DROP_EFFECT)
+      .and_then(|format| {
+        let mut buf = Vec::new();
+        raw::get_vec(format.get(), &mut buf).ok()?;
+        let bytes: [u8; 4] = buf.get(..4)?.try_into().ok()?;
+        Some(u32::from_le_bytes(bytes) & DROPEFFECT_MOVE != 0)
+      })
+      .unwrap_or(false);
+    Some(ClipboardData { paths, cut })
+  }
+}
+
+#[cfg(not(windows))]
+mod os_clipboard {
+  use super::ClipboardData;
+  pub fn write(_: &[String], _: bool, _: Option<u32>) -> Option<u32> {
+    None
+  }
+  pub fn read_if_changed(_: Option<u32>) -> Option<ClipboardData> {
+    None
+  }
 }
 
 /// 新しいフォルダを作る。名前が衝突したら退避名にする。戻り値は実際に作られたパス。
@@ -526,9 +751,57 @@ fn create_folder_impl(parent: &str, name: &str) -> Result<PathBuf, String> {
   }
   validate_name(name)?;
 
-  let target = unique_target(parent_dir, Path::new(name));
+  let target = unique_target(parent_dir, Path::new(name))?;
   std::fs::create_dir(&target).map_err(|e| format!("作成に失敗: {e}"))?;
   Ok(target)
+}
+
+/// 空のファイルを作る。名前が衝突したら退避名にする。戻り値は実際に作られたパス。
+#[tauri::command]
+pub fn create_file(app: tauri::AppHandle, parent: String, name: String) -> Result<String, String> {
+  use tauri::Manager;
+
+  let target = create_file_impl(&parent, &name)?;
+  app.state::<crate::undo::UndoStack>().push(crate::undo::UndoAction::CreateFile {
+    path: target.clone(),
+  });
+  Ok(target.to_string_lossy().to_string())
+}
+
+fn create_file_impl(parent: &str, name: &str) -> Result<PathBuf, String> {
+  let parent_dir = Path::new(parent);
+  if !parent_dir.is_dir() {
+    return Err(format!("{parent} はディレクトリではありません"));
+  }
+  validate_name(name)?;
+
+  let target = unique_target(parent_dir, Path::new(name))?;
+  // create_new: 確認と作成の間に同名ができても上書きしない。
+  std::fs::OpenOptions::new()
+    .write(true)
+    .create_new(true)
+    .open(&target)
+    .map_err(|e| format!("作成に失敗: {e}"))?;
+  Ok(target)
+}
+
+/// このフォルダを作業場所にしてターミナルを開く。Windows Terminal が無ければ PowerShell。
+#[tauri::command]
+pub fn open_terminal(path: String) -> Result<(), String> {
+  let dir = Path::new(&path);
+  if !dir.is_dir() {
+    return Err(format!("{path} はディレクトリではありません"));
+  }
+  let wt = std::process::Command::new("wt.exe").arg("-d").arg(dir).spawn();
+  if wt.is_ok() {
+    return Ok(());
+  }
+  std::process::Command::new("cmd.exe")
+    .args(["/c", "start", "", "powershell.exe", "-NoExit"])
+    .current_dir(dir)
+    .spawn()
+    .map(|_| ())
+    .map_err(|e| format!("ターミナルを起動できません: {e}"))
 }
 
 /// 名前を変える。戻り値は変更後のパス。
@@ -571,20 +844,11 @@ pub fn trash_entries(app: tauri::AppHandle, paths: Vec<String>) -> Result<usize,
 
   let n = trash_entries_impl(&paths)?;
 
-  // 削除直後の一覧から、今送ったものを拾って undo 用に持っておく。
-  // original_path で突き合わせる。
-  if let Ok(all) = trash::os_limited::list() {
-    let wanted: std::collections::HashSet<PathBuf> = paths.iter().map(PathBuf::from).collect();
-    let mut items: Vec<trash::TrashItem> =
-      all.into_iter().filter(|i| wanted.contains(&i.original_path())).collect();
-    // 同じ場所が複数回ゴミ箱に入っている場合、直近に消した時刻のものを選ぶ。
-    items.sort_by_key(|i| std::cmp::Reverse(i.time_deleted));
-    let mut seen = std::collections::HashSet::new();
-    items.retain(|i| seen.insert(i.original_path()));
-
-    if !items.is_empty() {
-      app.state::<crate::undo::UndoStack>().push(crate::undo::UndoAction::Trash { items });
-    }
+  // 元の場所だけを覚えておく。ゴミ箱の全件列挙は重いので、実際に取り消す時まで遅らせる。
+  if n > 0 {
+    app.state::<crate::undo::UndoStack>().push(crate::undo::UndoAction::Trash {
+      paths: paths.iter().map(PathBuf::from).collect(),
+    });
   }
 
   Ok(n)
@@ -650,24 +914,46 @@ pub fn preview_entry(path: String) -> Preview {
   }
 
   if PREVIEW_TEXT_EXT.contains(&ext.as_str()) || ext.is_empty() {
-    return match std::fs::read(p) {
+    return match read_head(p, TEXT_PREVIEW_CAP) {
       Ok(bytes) => {
         // NUL バイトを含んでいたらテキストとして解釈させない。
-        // バイナリを無理に文字列化すると表示が壊れるだけでなく、
-        // 巨大バイナリを丸ごと読む羽目にもなる。
+        // バイナリを無理に文字列化すると表示が壊れる。
         let probe = &bytes[..bytes.len().min(8192)];
         if probe.contains(&0) {
           return Preview::Unsupported { reason: "バイナリファイルです".into() };
         }
-        let truncated = bytes.len() > TEXT_PREVIEW_CAP;
-        let slice = &bytes[..bytes.len().min(TEXT_PREVIEW_CAP)];
-        Preview::Text { text: String::from_utf8_lossy(slice).to_string(), truncated }
+        let truncated = meta.len() > bytes.len() as u64;
+        Preview::Text { text: utf8_head_lossy(&bytes, truncated), truncated }
       }
       Err(e) => Preview::Unsupported { reason: format!("読めません: {e}") },
     };
   }
 
   Preview::Unsupported { reason: "対応していない種類です".into() }
+}
+
+/// ファイルの先頭 `cap` バイトだけを読む。
+///
+/// 以前は `fs::read` で全体を読んでから切っていたため、拡張子が `.log` や `.csv`、
+/// 拡張子なしの数GBファイルで Space を押すと、全体を読み終わるまで固まっていた。
+fn read_head(path: &Path, cap: usize) -> std::io::Result<Vec<u8>> {
+  use std::io::Read;
+  let mut bytes = Vec::with_capacity(cap.min(64 * 1024));
+  std::fs::File::open(path)?.take(cap as u64).read_to_end(&mut bytes)?;
+  Ok(bytes)
+}
+
+/// 途中で切った UTF-8 を文字列にする。
+/// 上限で多バイト文字の途中を切ると末尾が `�` になるので、切った時だけ最後の不完全な文字を捨てる。
+fn utf8_head_lossy(bytes: &[u8], truncated: bool) -> String {
+  if truncated {
+    if let Err(error) = std::str::from_utf8(bytes) {
+      if error.error_len().is_none() {
+        return String::from_utf8_lossy(&bytes[..error.valid_up_to()]).to_string();
+      }
+    }
+  }
+  String::from_utf8_lossy(bytes).to_string()
 }
 
 /// アドレスバーに打たれた途中のパスから候補を出す。
@@ -697,7 +983,7 @@ pub fn complete_path(input: String, show_hidden: Option<bool>) -> Vec<String> {
     .map(|e| e.path().to_string_lossy().to_string())
     .collect();
 
-  hits.sort_by_key(|p| p.to_lowercase());
+  hits.sort_by_cached_key(|p| p.to_lowercase());
   hits.truncate(20); // 出しすぎると選ぶのが手間になる
   hits
 }
@@ -726,7 +1012,7 @@ fn is_same_entry(a: &Path, b: &Path) -> bool {
 ///
 /// 空や区切り文字入りをそのまま渡すと、意図しない場所に作られたり
 /// 分かりにくいOSエラーになる。ここで弾いて理由を返す。
-fn validate_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_name(name: &str) -> Result<(), String> {
   let trimmed = name.trim();
   if trimmed.is_empty() {
     return Err("名前が空です".into());
@@ -742,7 +1028,7 @@ fn validate_name(name: &str) -> Result<(), String> {
 
 /// Windows の `canonicalize` は `\\?\C:\...` を返す。
 /// この形式は他アプリに渡すと解釈されないことがあるので、表示にもドラッグにも使えるよう剥がす。
-fn strip_unc(p: &Path) -> String {
+pub(crate) fn strip_unc(p: &Path) -> String {
   let s = p.to_string_lossy().to_string();
   s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
 }
@@ -750,6 +1036,32 @@ fn strip_unc(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// 落とされたファイル群を `dest` へ取り込む、同期のテスト用ヘルパー。戻り値は作られたパス。
+  ///
+  /// 以前は Tauri コマンドとしても公開していたが、進捗・中断・衝突の確認・undo のどれも通らない
+  /// 経路だったため削除した。画面からの転送はすべて `transfer::start_transfer` を使う。
+  fn accept_dropped(paths: Vec<String>, dest: String, move_files: bool) -> Result<Vec<String>, String> {
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let pairs = transfer(&paths, &dest, move_files, &never, &mut |_, _| {})?;
+    Ok(pairs.into_iter().map(|(_, to)| to.to_string_lossy().to_string()).collect())
+  }
+
+  #[test]
+  fn skipped_collisions_are_not_counted_in_totals() {
+    let root = scratch("scan_skip_conflict");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(from.join("same.bin"), vec![0u8; 100]).unwrap();
+    std::fs::write(from.join("new.bin"), vec![0u8; 7]).unwrap();
+    std::fs::write(to.join("same.bin"), b"old").unwrap();
+    let paths = [s(&from.join("same.bin")), s(&from.join("new.bin"))];
+
+    assert_eq!(scan_total_pub(&paths, &s(&to), false, ConflictPolicy::Rename), (2, 107));
+    assert_eq!(scan_total_pub(&paths, &s(&to), false, ConflictPolicy::Skip), (1, 7), "スキップされる分は書かない");
+    let _ = std::fs::remove_dir_all(&root);
+  }
 
   #[test]
   fn strips_windows_unc_prefix() {
@@ -845,6 +1157,112 @@ mod tests {
       "既存ファイルは残っていなければならない"
     );
     assert_eq!(std::fs::read(to.join("a (2).txt")).unwrap(), b"new");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[test]
+  fn copying_preserves_the_modified_time() {
+    let root = scratch("copy_mtime");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(from.join("d")).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+    for file in [from.join("a.txt"), from.join("d/b.txt")] {
+      std::fs::write(&file, b"x").unwrap();
+      std::fs::File::options().write(true).open(&file).unwrap().set_modified(old).unwrap();
+    }
+
+    accept_dropped(vec![s(&from.join("a.txt")), s(&from.join("d"))], s(&to), false).unwrap();
+
+    for file in [to.join("a.txt"), to.join("d/b.txt")] {
+      assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), old, "{} の日時が変わった", file.display());
+    }
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  fn remove_any(path: &Path) -> Result<(), String> {
+    if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }.map_err(|e| e.to_string())
+  }
+
+  fn with_policy(paths: &[String], dest: &Path, conflict: ConflictPolicy) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    let never = std::sync::atomic::AtomicBool::new(false);
+    transfer_with_policy(paths, &s(dest), false, conflict, &remove_any, &never, &mut |_, _| {})
+  }
+
+  #[test]
+  fn conflicts_list_only_colliding_names_outside_the_same_folder() {
+    let root = scratch("conflicts");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    for name in ["a.txt", "b.txt"] {
+      std::fs::write(from.join(name), b"new").unwrap();
+    }
+    std::fs::write(to.join("A.TXT"), b"old").unwrap();
+
+    let found = transfer_conflicts(vec![s(&from.join("a.txt")), s(&from.join("b.txt"))], s(&to));
+    assert_eq!(found, vec!["a.txt"], "Windows では大文字小文字違いも衝突");
+    assert!(transfer_conflicts(vec![s(&from.join("a.txt"))], s(&from)).is_empty(), "同じ場所は何もしないので衝突ではない");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[test]
+  fn skip_leaves_the_existing_item_and_reports_only_transferred_ones() {
+    let root = scratch("policy_skip");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(from.join("a.txt"), b"new").unwrap();
+    std::fs::write(from.join("b.txt"), b"new").unwrap();
+    std::fs::write(to.join("a.txt"), b"old").unwrap();
+
+    let pairs = with_policy(&[s(&from.join("a.txt")), s(&from.join("b.txt"))], &to, ConflictPolicy::Skip).unwrap();
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].0, from.join("b.txt"));
+    assert_eq!(std::fs::read(to.join("a.txt")).unwrap(), b"old");
+    assert!(!to.join("a (2).txt").exists());
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[test]
+  fn overwrite_discards_the_existing_item_then_places_the_new_one() {
+    let root = scratch("policy_overwrite");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(from.join("d")).unwrap();
+    std::fs::create_dir_all(to.join("d")).unwrap();
+    std::fs::write(from.join("a.txt"), b"new").unwrap();
+    std::fs::write(to.join("a.txt"), b"old").unwrap();
+    std::fs::write(from.join("d/new.txt"), b"n").unwrap();
+    std::fs::write(to.join("d/stale.txt"), b"s").unwrap();
+
+    with_policy(&[s(&from.join("a.txt")), s(&from.join("d"))], &to, ConflictPolicy::Overwrite).unwrap();
+    assert_eq!(std::fs::read(to.join("a.txt")).unwrap(), b"new");
+    assert!(to.join("d/new.txt").exists());
+    assert!(!to.join("d/stale.txt").exists(), "フォルダの上書きは中身を混ぜない");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// `C:\x\a\a` を `C:\x` へ上書きで移すと、既存の `C:\x\a` を退かした時点で転送元が消える。
+  #[test]
+  fn overwrite_refuses_a_target_that_contains_the_source() {
+    let root = scratch("policy_overwrite_parent");
+    std::fs::create_dir_all(root.join("a/a")).unwrap();
+    std::fs::write(root.join("a/a/keep.txt"), b"k").unwrap();
+
+    assert!(with_policy(&[s(&root.join("a/a"))], &root, ConflictPolicy::Overwrite).is_err());
+    assert!(root.join("a/a/keep.txt").exists());
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// 空き名が尽きたら、既存を上書きせずに失敗する。
+  #[test]
+  fn running_out_of_free_names_is_an_error_not_an_overwrite() {
+    let root = scratch("unique_exhausted");
+    for name in ["a.txt", "a (2).txt", "a (3).txt"] {
+      std::fs::write(root.join(name), b"keep").unwrap();
+    }
+    assert!(unique_target_within(&root, Path::new("a.txt"), 4).is_err());
+    assert_eq!(unique_target_within(&root, Path::new("a.txt"), 5).unwrap(), root.join("a (4).txt"));
     let _ = std::fs::remove_dir_all(&root);
   }
 
@@ -1131,6 +1549,101 @@ mod tests {
     let _ = std::fs::remove_dir_all(&root);
   }
 
+  /// 中断された項目を完了ペアとして返すと、トレイから実際には動いていない項目が消え、
+  /// undo にも存在しない転送が積まれる。
+  #[test]
+  fn cancelled_items_are_not_reported_as_completed() {
+    let root = scratch("cancel_report");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(from.join("small.txt"), b"x").unwrap();
+    std::fs::write(from.join("big.bin"), vec![7u8; 5 * 1024 * 1024]).unwrap();
+
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let pairs = transfer(
+      &[s(&from.join("small.txt")), s(&from.join("big.bin"))],
+      &s(&to),
+      // 移動だと同一ボリュームでは rename で一瞬に終わり、中断の余地が無い。
+      false,
+      &cancel,
+      &mut |p, current| {
+        if current.ends_with("big.bin") && p.files_done == 1 {
+          cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+      },
+    )
+    .unwrap();
+
+    assert_eq!(pairs.len(), 1, "完了したのは small.txt だけ");
+    assert_eq!(pairs[0].0, from.join("small.txt"));
+    assert!(!to.join("big.bin").exists(), "書きかけは残さない");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// 同じドライブ内のフォルダ移動は rename で済ませる。
+  /// コピーしていればファイルの実体（ファイルID）が変わるので、それで見分ける。
+  #[cfg(windows)]
+  #[test]
+  fn moving_a_directory_on_the_same_volume_renames_instead_of_copying() {
+    let root = scratch("move_dir_rename");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(from.join("d/nested")).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(from.join("d/nested/a.txt"), b"x").unwrap();
+    let before = std::fs::metadata(from.join("d/nested/a.txt")).unwrap().modified().unwrap();
+
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let mut bytes_seen = 0;
+    let pairs = transfer(&[s(&from.join("d"))], &s(&to), true, &never, &mut |p, _| bytes_seen = p.bytes_done).unwrap();
+
+    assert_eq!(pairs.len(), 1);
+    assert!(!from.join("d").exists());
+    assert_eq!(std::fs::read(to.join("d/nested/a.txt")).unwrap(), b"x");
+    assert_eq!(bytes_seen, 0, "中身を1バイトも読み書きしていない");
+    assert_eq!(std::fs::metadata(to.join("d/nested/a.txt")).unwrap().modified().unwrap(), before);
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  #[cfg(windows)]
+  #[test]
+  fn same_volume_compares_drive_prefixes_case_insensitively() {
+    assert!(same_volume(Path::new(r"C:\a\b"), Path::new(r"c:\x")));
+    assert!(!same_volume(Path::new(r"C:\a"), Path::new(r"D:\a")));
+    assert!(!same_volume(Path::new(r"relative\a"), Path::new(r"C:\a")));
+  }
+
+  #[test]
+  fn scan_total_skips_same_volume_moves() {
+    let root = scratch("scan_skip_move");
+    std::fs::write(root.join("a.bin"), vec![0u8; 100]).unwrap();
+    let paths = [s(&root.join("a.bin"))];
+    assert_eq!(scan_total_pub(&paths, &s(&root), false, ConflictPolicy::Rename), (1, 100), "コピーは数える");
+    #[cfg(windows)]
+    assert_eq!(scan_total_pub(&paths, &s(&root), true, ConflictPolicy::Rename), (0, 0), "同一ドライブの移動は数えない");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// フォルダを途中で止めたら、欠けたフォルダを転送先に残さない。
+  #[test]
+  fn cancelling_a_directory_copy_removes_the_partial_tree() {
+    let root = scratch("cancel_dir");
+    let (from, to) = (root.join("from"), root.join("to"));
+    std::fs::create_dir_all(from.join("d")).unwrap();
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(from.join("d/big.bin"), vec![7u8; 5 * 1024 * 1024]).unwrap();
+
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let pairs = transfer(&[s(&from.join("d"))], &s(&to), false, &cancel, &mut |_, _| {
+      cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    })
+    .unwrap();
+
+    assert!(pairs.is_empty());
+    assert!(!to.join("d").exists(), "書きかけのフォルダは消されているべき");
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
   fn preview_kind(p: &Preview) -> &'static str {
     match p {
       Preview::Text { .. } => "text",
@@ -1165,6 +1678,25 @@ mod tests {
     } else {
       panic!("text であるはず");
     }
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// 上限を超える部分は読まない。多バイト文字の途中で切っても末尾を化けさせない。
+  #[test]
+  fn preview_reads_only_the_head_and_keeps_utf8_boundaries() {
+    let root = scratch("preview_head");
+    // 3バイト文字「あ」を並べ、上限がちょうど文字の途中に来るようにする。
+    let text = "あ".repeat(TEXT_PREVIEW_CAP / 3 + 10);
+    assert_ne!(TEXT_PREVIEW_CAP % 3, 0, "上限が文字境界だとこのテストは意味を失う");
+    std::fs::write(root.join("big.log"), &text).unwrap();
+
+    assert_eq!(read_head(&root.join("big.log"), 10).unwrap().len(), 10);
+    let Preview::Text { text: shown, truncated } = preview_entry(s(&root.join("big.log"))) else {
+      panic!("text であるはず");
+    };
+    assert!(truncated);
+    assert!(!shown.ends_with('\u{FFFD}'), "切れ目の不完全な文字は捨てる");
+    assert!(shown.chars().all(|c| c == 'あ'));
     let _ = std::fs::remove_dir_all(&root);
   }
 
