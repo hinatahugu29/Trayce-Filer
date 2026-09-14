@@ -33,3 +33,6 @@ tauri-plugin-opener = "2.5.4"
 # Windows では ReadDirectoryChangesW を使う。既定の features で足りる。
 notify = "8.2.0"
 zip = { version = "4.2.0", default-features = false, features = ["deflate"] }
+
+[target."cfg(windows)".dependencies]
+clipboard-win = "5"

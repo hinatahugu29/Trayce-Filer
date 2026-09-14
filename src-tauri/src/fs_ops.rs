@@ -622,9 +622,14 @@ fn copy_dir_all(
 ///
 /// **アプリ側に持つ**のが肝心。窓が複数あるのがこのファイラの前提なので、
 /// 窓Aで切り取って窓Bで貼る、が成立しないと使い物にならない。
+///
+/// 加えて OS のクリップボードにも同じ内容を載せ、Explorer など他のアプリとも
+/// コピー / 切り取り / 貼り付けを行き来できるようにする。
 #[derive(Default)]
 pub struct Clipboard {
   inner: std::sync::Mutex<ClipboardData>,
+  /// 最後に自分が OS へ書いた時のシーケンス番号。違っていれば他のアプリが書き換えている。
+  os_seq: std::sync::Mutex<Option<u32>>,
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -637,13 +642,94 @@ pub struct ClipboardData {
 #[tauri::command]
 pub fn set_clipboard(app: tauri::AppHandle, paths: Vec<String>, cut: bool) {
   use tauri::Manager;
-  *app.state::<Clipboard>().inner.lock().unwrap() = ClipboardData { paths, cut };
+  let state = app.state::<Clipboard>();
+  {
+    let mut os_seq = state.os_seq.lock().unwrap();
+    // OS 側への反映は失敗してもアプリ内の貼り付けは成り立つので、黙って続ける。
+    if let Some(seq) = os_clipboard::write(&paths, cut, *os_seq) {
+      *os_seq = Some(seq);
+    }
+  }
+  let mut inner = state.inner.lock().unwrap();
+  *inner = ClipboardData { paths, cut };
 }
 
 #[tauri::command]
 pub fn get_clipboard(app: tauri::AppHandle) -> ClipboardData {
   use tauri::Manager;
-  app.state::<Clipboard>().inner.lock().unwrap().clone()
+  let state = app.state::<Clipboard>();
+  let os_seq = *state.os_seq.lock().unwrap();
+  // 自分が書いた後に他のアプリがファイルを載せていれば、そちらが新しい。
+  if let Some(data) = os_clipboard::read_if_changed(os_seq) {
+    return data;
+  }
+  let data = state.inner.lock().unwrap().clone();
+  data
+}
+
+#[cfg(windows)]
+mod os_clipboard {
+  use super::ClipboardData;
+  use clipboard_win::{raw, Clipboard};
+
+  const CF_HDROP: u32 = 15;
+  /// Explorer がコピーか切り取りかを伝えるのに使う登録形式。
+  const DROP_EFFECT: &str = "Preferred DropEffect";
+  const DROPEFFECT_COPY: u32 = 1;
+  const DROPEFFECT_MOVE: u32 = 2;
+
+  fn current_seq() -> Option<u32> {
+    raw::seq_num().map(|n| n.get())
+  }
+
+  /// ファイル一覧を OS へ書く。空なら、自分が書いたものが残っている時だけ消す。
+  /// 戻り値は書き込み後のシーケンス番号。
+  pub fn write(paths: &[String], cut: bool, last_seq: Option<u32>) -> Option<u32> {
+    let _clip = Clipboard::new_attempts(10).ok()?;
+    if paths.is_empty() {
+      // 他のアプリがコピーした内容を、切り取りの消費で巻き添えにしない。
+      if last_seq.is_some() && last_seq == current_seq() {
+        raw::empty().ok()?;
+      }
+      return current_seq();
+    }
+    raw::set_file_list(paths).ok()?;
+    let effect = if cut { DROPEFFECT_MOVE } else { DROPEFFECT_COPY };
+    if let Some(format) = raw::register_format(DROP_EFFECT) {
+      let _ = raw::set_without_clear(format.get(), &effect.to_le_bytes());
+    }
+    current_seq()
+  }
+
+  pub fn read_if_changed(last_seq: Option<u32>) -> Option<ClipboardData> {
+    let seq = current_seq()?;
+    if Some(seq) == last_seq || !raw::is_format_avail(CF_HDROP) {
+      return None;
+    }
+    let _clip = Clipboard::new_attempts(10).ok()?;
+    let mut paths = Vec::new();
+    raw::get_file_list(&mut paths).ok()?;
+    let cut = raw::register_format(DROP_EFFECT)
+      .and_then(|format| {
+        let mut buf = Vec::new();
+        raw::get_vec(format.get(), &mut buf).ok()?;
+        let bytes: [u8; 4] = buf.get(..4)?.try_into().ok()?;
+        Some(u32::from_le_bytes(bytes) & DROPEFFECT_MOVE != 0)
+      })
+      .unwrap_or(false);
+    Some(ClipboardData { paths, cut })
+  }
+}
+
+#[cfg(not(windows))]
+mod os_clipboard {
+  use super::ClipboardData;
+  pub fn write(_: &[String], _: bool, _: Option<u32>) -> Option<u32> {
+    None
+  }
+  pub fn read_if_changed(_: Option<u32>) -> Option<ClipboardData> {
+    None
+  }
 }
 
 /// 新しいフォルダを作る。名前が衝突したら退避名にする。戻り値は実際に作られたパス。
