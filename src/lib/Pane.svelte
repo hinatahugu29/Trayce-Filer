@@ -40,6 +40,11 @@
   export let onOpenSettings: () => void = () => {}
   /** 配置（ペインの並びの型）を開く。タブ全体の話なので親が持つ。 */
   export let onOpenLayouts: () => void = () => {}
+  /**
+   * すべてのペインを同じ並びにする。ペインを跨ぐ話なので親へ委ねる。
+   * 向きまで渡すのは、各ペインが自分の向きへ反転すると揃わないため。
+   */
+  export let onSortAll: (key: SortKey, descending: boolean) => void = () => {}
   export let onNote: (message: string) => void = () => {}
   export let onSplit: (path: string) => void = () => {}
   /** 隣に検索ペインを足す。query を渡すと、その語を入れた状態で開く。 */
@@ -554,14 +559,55 @@
     await runTransfer(paths, listing.path, moveFiles, true)
   }
 
+  /**
+   * その列を押した時に行き着く並び。
+   *
+   * 同じ列をもう一度なら昇順/降順を反転。別の列なら、その列で普通に見たい向きから入る。
+   * 「全ペインを揃える」側もここを通す。揃えるのに各ペインが自分の向きへ反転してしまうと、
+   * 押した結果が揃わない。
+   */
+  function nextSort(key: SortKey): { key: SortKey; descending: boolean } {
+    if (sort.key === key) return { key, descending: !sort.descending }
+    // 日時とサイズは「大きい方・新しい方を先に見たい」ことが多いので降順から入る。
+    return { key, descending: key === 'modified' || key === 'size' }
+  }
+
   /** 同じ列をもう一度押したら昇順/降順を反転する。 */
   function changeSort(key: SortKey) {
-    sort =
-      sort.key === key
-        ? { ...sort, descending: !sort.descending }
-        : // 日時とサイズは「大きい方・新しい方を先に見たい」ことが多いので降順から入る。
-          { ...sort, key, descending: key === 'modified' || key === 'size' }
+    const next = nextSort(key)
+    sort = { ...sort, key: next.key, descending: next.descending }
     reload()
+  }
+
+  /**
+   * 指定された並びをそのまま当てる。全ペインを揃える時に外から呼ぶ。
+   * 既に同じ並びなら何もしない（揃える操作で全ペインを読み直すのは無駄）。
+   */
+  export function applySort(key: SortKey, descending: boolean) {
+    if (sort.key === key && sort.descending === descending) return
+    sort = { ...sort, key, descending }
+    reload()
+  }
+
+  /** 軸は変えずに向きだけ返す。いま何で並んでいるかを思い出さずに押せる。 */
+  function reverseSort() {
+    sort = { ...sort, descending: !sort.descending }
+    reload()
+  }
+
+  /**
+   * その場展開をまとめて開く／畳む。
+   *
+   * 打ち切った時は黙らない。開かなかったフォルダが「中身が無い」ように見える。
+   */
+  async function expandAll() {
+    const result = await fileList?.toggleExpandAll()
+    if (!result) return
+    if (result.action === 'collapsed') {
+      onNote(`展開していた ${result.count} 件を畳みました`)
+    } else if (result.count < result.total) {
+      onNote(`${result.total} 件中 先頭 ${result.count} 件を開きました`)
+    }
   }
 
   function toggleHidden() {
@@ -781,18 +827,28 @@
    * 選択をトレイに入れる／外す項目。
    * 選択が全部トレイにあれば「外す」、1つでも無ければ「入れる」（混在時に一部だけ外れる事故を避ける）。
    */
-  function trayMenuItem(): MenuItem {
+  /** いまの選択が全部トレイに入っているか。入れる/外すのどちらに倒すかを決める。 */
+  function selectionAllInTray(): boolean {
     const keys = new Set(trayItems.map(api.pathIdentity))
-    const allIn = selection.length > 0 && selection.every((path) => keys.has(api.pathIdentity(path)))
+    return selection.length > 0 && selection.every((path) => keys.has(api.pathIdentity(path)))
+  }
+
+  /** 選択をトレイに入れる、または全部入っていれば外す。メニューとキーの共通の入口。 */
+  function toggleTray() {
+    if (selection.length === 0) return
+    const keys = new Set(trayItems.map(api.pathIdentity))
+    if (selectionAllInTray()) onTrayRemoveMany(selection)
+    else selection.filter((path) => !keys.has(api.pathIdentity(path))).forEach(onTrayToggle)
+  }
+
+  function trayMenuItem(): MenuItem {
+    const allIn = selectionAllInTray()
     return {
       kind: 'item',
       label: allIn ? 'トレイから外す' : 'トレイに入れる',
-      hint: 'Alt+クリック',
+      hint: `Alt+クリック / ${hint('trayToggle')}`,
       disabled: selection.length === 0,
-      run: () => {
-        if (allIn) onTrayRemoveMany(selection)
-        else selection.filter((path) => !keys.has(api.pathIdentity(path))).forEach(onTrayToggle)
-      },
+      run: toggleTray,
     }
   }
 
@@ -981,6 +1037,69 @@
         if (ev.repeat) break
         ev.preventDefault()
         showPreview = !showPreview
+        break
+      // 並べ替え。押した列がもう一度来たら昇順/降順が反転するので、
+      // 単キーを叩き続けるだけで「どちらから見たいか」まで決められる。
+      // 押しっぱなしは無視する。連射すると昇順/降順が高速に入れ替わるだけで、
+      // そのたびに一覧を引き直すことになる。
+      case 'sortName':
+        if (ev.repeat) break
+        ev.preventDefault()
+        changeSort('name')
+        break
+      case 'sortSize':
+        if (ev.repeat) break
+        ev.preventDefault()
+        changeSort('size')
+        break
+      case 'sortExt':
+        if (ev.repeat) break
+        ev.preventDefault()
+        changeSort('ext')
+        break
+      case 'sortModified':
+        if (ev.repeat) break
+        ev.preventDefault()
+        changeSort('modified')
+        break
+      case 'sortReverse':
+        if (ev.repeat) break
+        ev.preventDefault()
+        reverseSort()
+        break
+      // 全ペインを揃える。押した結果の並びをここで決めてから配る。
+      case 'sortNameAll':
+      case 'sortSizeAll':
+      case 'sortExtAll':
+      case 'sortModifiedAll': {
+        if (ev.repeat) break
+        ev.preventDefault()
+        const key: SortKey =
+          action === 'sortNameAll'
+            ? 'name'
+            : action === 'sortSizeAll'
+              ? 'size'
+              : action === 'sortExtAll'
+                ? 'ext'
+                : 'modified'
+        const next = nextSort(key)
+        onSortAll(next.key, next.descending)
+        break
+      }
+      case 'toggleExpandAll':
+        if (ev.repeat) break
+        ev.preventDefault()
+        expandAll()
+        break
+      case 'trayToggle':
+        if (ev.repeat) break
+        ev.preventDefault()
+        toggleTray()
+        break
+      case 'toggleHidden':
+        if (ev.repeat) break
+        ev.preventDefault()
+        toggleHidden()
         break
       // 一覧の中の操作（↑↓/Enter/F2/Delete/Ctrl+A）は FileList 側が持つ。
       // タブ操作は窓レベル（Filer.svelte）が持つ。

@@ -57,8 +57,10 @@ results available as normal copy/move/preview/tray sources.
 - [ ] Review follow-up — reduce per-entry search cache memory (four owned strings per entry) if multi-million-entry roots become common
 - [ ] Review follow-up — split `fs_ops.rs` (listing / transfer / clipboard / preview) and continue the gradual `Pane.svelte` extraction
 - [x] Navigation-cost round — per-place view state, folder peek, in-place expansion, breadcrumb siblings, branch memory, filter-to-search promotion, adaptive prefetch, named pane layouts, window identity, attention-based column gradation, box selection, move-kind measurement, tray waypoints
-- [ ] **Measurement window (next action)** — use the app normally for 1–2 weeks, then read Settings → 移動の集計 and decide the next investment from the data rather than from argument. Thresholds are printed next to the numbers
+- [x] Left-hand keyboard round — single-key sorting (`A`/`S`/`X`/`Z`), direction-only reverse (`D`), sort every pane at once (`Shift+`), expand/collapse all (`E`), collect to tray (`C`), hidden files (`R`); search pane made honest about what stopping discards and wired to the same keys
+- [ ] **Measurement window (next action)** — use the app normally for 1–2 weeks, then read Settings → 移動の集計 and decide the next investment from the data rather than from argument. Thresholds are printed next to the numbers. **The tally has not started yet**: `state.json` carried no `navTally` as of 2026-09-16, so the window begins at first use of a build from `caaa30f` onwards
 - [ ] Deferred until the measurement says so — an overview/teleport surface for Trayce, tray cycling (next/previous waypoint on one key), tray folder rows as drop targets
+- [ ] Search follow-up, deferred by the owner on 2026-09-16 — a search pane split from a search pane builds a second index of the same roots (accepted: duplicating is the user's own choice), and files created after the scan need a reload to appear. Both documented in `SPEC.md` §4.4; revisit only if real use makes either painful
 
 ## Current status
 
@@ -277,6 +279,20 @@ Settings → 移動の集計 answers that:
 
 Trayce and ChainFlow Filer are separate products on separate axes (many windows versus one screen) and are not converging. A mechanism that wins on one axis can lose on the other: chaining panes buys back pixels in ChainFlow, where pixels are scarce, but in Trayce it would add constraint with nothing bought. Move the idea, not the form.
 
+## The left-hand keyboard round
+
+- 2026-09-16: Merged the navigation-cost round as [#3](https://github.com/hinatahugu29/Trayce-Filer/pull/3) after a review found three defects, fixed in `76dfe69`: the breadcrumb sibling list closed on the window's `pointerdown` before its own `click` could fire, so picking a sibling never navigated and the `▾` could not be toggled shut; marquee auto-scroll captured its direction when the interval was created, so dragging from one edge to the opposite one kept scrolling the original way; and `savedPathStates={pane.pathStates ?? []}` wrote `?? []` straight into a prop — the pattern that once froze this app with `RangeError: Invalid array length`. It was harmless only because `Pane.svelte` reads that prop once at init, which is not a property the next edit is obliged to preserve. Stable constants now, and the neighbouring `sidebar ?? { primary: 'tree' }` with it.
+
+- 2026-09-16: Put sorting and collecting under the left hand (`e082846`). The request was single-key sorting; almost all of it turned out to exist already. `dirs_first` was **already** partitioning before comparing, so "folders pinned on top, each kind sorted within itself" needed no Rust change — only a test, because under a single key the two orderings both become load-bearing on every press. `changeSort` already reversed on a repeated column. There was no type-ahead, so the letter keys were free, and `Q`/`W`/`F`/`N`/`Space` had already established the idiom (hovered pane first, active pane otherwise, never while typing in a field). The work was wiring, plus four judgements: hold-to-repeat is ignored (it would flip the direction back and forth, re-listing each time); `Shift+` fans a sort out to every directory pane with the direction decided **once** at the initiating pane, since letting each pane reverse its own would defeat the point of levelling them; search panes are excluded because their ordering belongs to the search, not to the window; and `E` stops after 40 folders, saying so, because expansion costs one read per folder.
+
+  Asked afterwards for "add the current folder to favourites", which `F` had done since the hover-control round. Worth remembering that this codebase is now large enough that its owner can want something it already has — check before building.
+
+- 2026-09-16: Read the search subsystem end to end on request and fixed what it was lying about (`5c66281`). **Stop is not a pause**: `cancel_search` removes the session, which drops the worker's `Sender`, ends the thread and frees the whole `CachedEntry` cache — yet the status line read `停止しました — N件を読み込み済み`, which reads as though those N are still searchable. Worse, `requestId` was never cleared (it had exactly one assignment, in `runIndex`), so typing afterwards sent a filter that came back `検索が開始されていません`, and that string overwrote the notice that the search had been stopped. The pane was then inert with nothing on screen explaining why. Stopping now releases the id, settles `running` and the status itself — it has to, because the done event is routed by that same id — and a filter attempted while stopped says a reload is needed instead of failing silently.
+
+  Also connected the new sort/tray keys to the search pane (a key that works in one pane kind and is silently dead in another makes you check the pane kind before pressing), and made new search panes start at modified-descending: searching is mostly for something touched recently, so name order costs a guaranteed second press.
+
+  Deferred by the owner, deliberately: a search pane split from a search pane re-scans the same roots into a second index (their call — it is the user's choice to duplicate), and files created after the scan do not appear until a reload. Both are now written down in `SPEC.md` §4.4 rather than left to be rediscovered.
+
 ## Commit log
 
 - `3f37899` — `docs: add tray workbench implementation handover`
@@ -369,3 +385,6 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 - `fd60d00` — `docs: record hardening round and new features`
 - `9d7293f` — `fix: keep narrow directory panes readable`
 - `caaa30f` — `feat: make returning to a place cheaper than travelling to a new one`
+- `76dfe69` — `fix: make breadcrumb siblings, marquee auto-scroll, and pane props behave`
+- `e082846` — `feat: put sorting and collecting under the left hand`
+- `5c66281` — `fix: tell the truth when a search is stopped, and match the pane keys`

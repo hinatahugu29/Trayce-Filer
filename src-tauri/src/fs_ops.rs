@@ -1395,6 +1395,30 @@ mod tests {
     }
   }
 
+  /// 単キーで並べ替えを切り替える使い方では、押すたびに「フォルダの並び」と
+  /// 「ファイルの並び」の両方が同時に意味を持つ。片方だけ効くと、押した結果が
+  /// 読めなくなる。フォルダが上に固まるのは変えずに、それぞれの群の中で
+  /// キーが効くことを固定する。
+  #[test]
+  fn each_kind_is_sorted_within_its_own_group() {
+    let mut v = vec![
+      entry("b.txt", false, 0, 200),
+      entry("olddir", true, 0, 100),
+      entry("a.txt", false, 0, 300),
+      entry("newdir", true, 0, 400),
+    ];
+
+    sort_entries(&mut v, spec(SortKey::Modified, true));
+    assert_eq!(
+      names(&v),
+      vec!["newdir", "olddir", "a.txt", "b.txt"],
+      "フォルダ同士・ファイル同士のそれぞれで新しい順になること"
+    );
+
+    sort_entries(&mut v, spec(SortKey::Modified, false));
+    assert_eq!(names(&v), vec!["olddir", "newdir", "b.txt", "a.txt"]);
+  }
+
   #[test]
   fn dirs_first_can_be_turned_off() {
     let mut v = vec![entry("zdir", true, 0, 0), entry("afile.txt", false, 0, 0)];

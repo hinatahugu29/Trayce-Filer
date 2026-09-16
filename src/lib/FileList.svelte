@@ -125,6 +125,41 @@
     expanded = expanded
   }
 
+  /**
+   * 一度に開ける数の上限。
+   *
+   * 展開は1フォルダにつき1回読みに行く。数千件のフォルダで全部開くと、そのぶんの
+   * 読み込みを一斉に投げることになり、本来の操作が止まる。見て分かる量を超えた
+   * 展開はそもそも読めないので、頭から打ち切って何件開いたかを返す。
+   */
+  const EXPAND_ALL_CAP = 40
+
+  /**
+   * この段のフォルダをまとめて開く／すべて畳む。
+   *
+   * 1つでも開いていれば畳む側に倒す。「開いたものを片付ける」ほうが後から必要になる
+   * 操作で、どちらに倒すか迷った時に指が覚えやすい。
+   *
+   * 戻り値は呼び出し側が結果を伝えるため。打ち切った時に黙っていると、開かなかった
+   * フォルダが「中身が無い」ように見える。
+   */
+  export async function toggleExpandAll(): Promise<{
+    action: 'collapsed' | 'expanded'
+    count: number
+    total: number
+  }> {
+    const tops = entries.filter((entry) => entry.is_dir)
+    if (expanded.size > 0) {
+      const count = expanded.size
+      expanded = new Map()
+      return { action: 'collapsed', count, total: tops.length }
+    }
+
+    const targets = tops.slice(0, EXPAND_ALL_CAP).map((entry) => resolvePath(entry))
+    await Promise.all(targets.map((target) => toggleExpand(target)))
+    return { action: 'expanded', count: targets.length, total: tops.length }
+  }
+
   // 「..」を先頭の仮想行として混ぜる。展開した子は親のすぐ下へ、深さを持たせて並べる。
   type Row =
     | { kind: 'up'; path: string }

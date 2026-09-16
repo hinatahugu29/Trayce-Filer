@@ -256,8 +256,11 @@
       scopePaths: [path],
       query: '',
       matchPath: true,
-      sortKey: settings?.sortKey ?? 'name',
-      sortDescending: settings?.sortDescending ?? false,
+      // 検索は通常ペインと既定を分ける。フォルダを開く時は名前順が要るが、探す時は
+      // 「直近に触ったもの」から当たるのが大半で、名前順から入ると必ず並べ替え直す。
+      // 保存済みの検索は自分の指定を持っているので、ここは新しく作る時だけの話。
+      sortKey: 'modified',
+      sortDescending: true,
       dirsFirst: settings?.dirsFirst ?? true,
       showPreview: settings?.showPreview ?? false,
       showHistory: true,
@@ -286,6 +289,32 @@
     const tab = activeTab
     if (!tab) return undefined
     return tab.panes.find((p) => p.id === tab.activeId)?.ref?.currentPath() ?? undefined
+  }
+
+  /**
+   * いまのタブの全ペインを同じ並びにする。
+   *
+   * 転送元と転送先を同じ並びで見たい場面は多いが、ペインごとに押して回ると
+   * 「揃える」という1つの意図に操作が増える。向きまで渡されたものをそのまま当てるので、
+   * ペインごとに反転してばらけることはない。
+   *
+   * 検索ペインは対象外。結果の並びは検索条件の側に属しているので、
+   * ここで揃えると検索ペイン自身の指定を黙って書き換えることになる。
+   */
+  function sortAllPanes(key: api.SortKey, descending: boolean) {
+    const tab = activeTab
+    if (!tab) return
+    let applied = 0
+    for (const pane of tab.panes) {
+      if (pane.kind === 'search') continue
+      const ref = pane.ref
+      if (ref && 'applySort' in ref) {
+        ref.applySort(key, descending)
+        applied += 1
+      }
+    }
+    const label = { name: '名前', size: 'サイズ', ext: '種類', modified: '更新日時' }[key]
+    note(`${applied} ペインを ${label}の${descending ? '降順' : '昇順'} に揃えました`)
   }
 
   /** 窓のタイトルと俯瞰表示へ、現在タブの全ペインを同期する。 */
@@ -841,6 +870,7 @@
               {settings}
               onOpenSettings={() => (settingsOpen = true)}
               onOpenLayouts={() => (layoutsOpen = true)}
+              onSortAll={sortAllPanes}
               {dragIcon}
               active={pane.id === activeTab.activeId}
               keyboardTarget={pane.id === (hoveredPaneId ?? activeTab.activeId)}
@@ -921,7 +951,16 @@
         {resolveKey('hoverFavorite', settings.shortcuts)} お気に入り ·
         {resolveKey('hoverSplitPane', settings.shortcuts)} 分割 ·
         {resolveKey('hoverSplitSearchPane', settings.shortcuts)} 検索分割 ·
-        {resolveKey('hoverPreview', settings.shortcuts)} プレビュー
+        {resolveKey('hoverPreview', settings.shortcuts)} プレビュー ·
+        <!-- 並べ替えは4つまとめて出す。1つずつ「○○で並べ替え」と書くと帯が埋まる。 -->
+        {resolveKey('sortName', settings.shortcuts)}{resolveKey('sortSize', settings.shortcuts)}{resolveKey(
+          'sortExt',
+          settings.shortcuts
+        )}{resolveKey('sortModified', settings.shortcuts)} 並べ替え ·
+        {resolveKey('sortReverse', settings.shortcuts)} 反転 ·
+        {resolveKey('toggleExpandAll', settings.shortcuts)} 展開 ·
+        {resolveKey('trayToggle', settings.shortcuts)} トレイ ·
+        {resolveKey('toggleHidden', settings.shortcuts)} 隠し
       </span>
     {/if}
     <span class="hotkey">{hotkey} で窓一覧 · Ctrl+T 新規タブ</span>
