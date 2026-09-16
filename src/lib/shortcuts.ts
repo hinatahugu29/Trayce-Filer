@@ -32,6 +32,18 @@ export type ActionId =
   | 'hoverSplitPane'
   | 'hoverSplitSearchPane'
   | 'hoverPreview'
+  | 'sortName'
+  | 'sortSize'
+  | 'sortExt'
+  | 'sortModified'
+  | 'sortReverse'
+  | 'sortNameAll'
+  | 'sortSizeAll'
+  | 'sortExtAll'
+  | 'sortModifiedAll'
+  | 'toggleExpandAll'
+  | 'trayToggle'
+  | 'toggleHidden'
   | 'layouts'
 
 export type ActionDef = {
@@ -73,6 +85,31 @@ export const ACTIONS: ActionDef[] = [
   { id: 'hoverSplitPane', label: 'ポインター先を分割', fallback: 'N', group: '左手操作' },
   { id: 'hoverSplitSearchPane', label: '検索ペインを隣に追加', fallback: 'Shift+N', group: '左手操作' },
   { id: 'hoverPreview', label: 'ポインター先のプレビュー', fallback: 'Space', group: '左手操作' },
+
+  // 並べ替えは左手のホームポジションに寄せる。列見出しへポインターを運ぶ往復が
+  // 一番よく起きる無駄で、しかも並べ替えは「押して、見て、押し直す」試行錯誤に
+  // なりやすい。同じキーをもう一度押すと昇順/降順が反転する。
+  // フォルダが上に固定されることは変わらない（フォルダはフォルダ内、
+  // ファイルはファイル内で並ぶ）。
+  { id: 'sortName', label: '名前で並べ替え', fallback: 'A', group: '左手操作' },
+  { id: 'sortSize', label: 'サイズで並べ替え', fallback: 'S', group: '左手操作' },
+  { id: 'sortExt', label: '種類で並べ替え', fallback: 'X', group: '左手操作' },
+  { id: 'sortModified', label: '更新日時で並べ替え', fallback: 'Z', group: '左手操作' },
+  // 軸を変えずに向きだけ返す。押し直しでも反転できるが、それだと「いま何で並んでいるか」を
+  // 思い出してから押すことになる。向きだけ変えたい時に軸を意識させない。
+  { id: 'sortReverse', label: '並び順を反転', fallback: 'D', group: '左手操作' },
+  // 転送元と転送先を同じ並びで見たい場面は多い。ペインごとに押して回るのは
+  // 「同じ状態に揃える」という1つの意図に対して操作が増えすぎる。
+  { id: 'sortNameAll', label: '全ペインを名前で並べ替え', fallback: 'Shift+A', group: '左手操作' },
+  { id: 'sortSizeAll', label: '全ペインをサイズで並べ替え', fallback: 'Shift+S', group: '左手操作' },
+  { id: 'sortExtAll', label: '全ペインを種類で並べ替え', fallback: 'Shift+X', group: '左手操作' },
+  { id: 'sortModifiedAll', label: '全ペインを更新日時で並べ替え', fallback: 'Shift+Z', group: '左手操作' },
+
+  // その場展開は → ← で1つずつしか触れない。深く広げた後に畳む手段が要る。
+  { id: 'toggleExpandAll', label: 'その場展開をすべて開く/畳む', fallback: 'E', group: '左手操作' },
+  // 「左手で集める」のが元々の思想なのに、集める操作だけマウスが要るのはおかしい。
+  { id: 'trayToggle', label: '選択をトレイに入れる/外す', fallback: 'C', group: '左手操作' },
+  { id: 'toggleHidden', label: '隠しファイルの表示切替', fallback: 'R', group: '左手操作' },
 
   // 保存した配置そのものは Ctrl+1..9 で直接呼ぶ。番号は一覧の並び順から決まる
   // 位置指定で、アクション1つ1つに割り当てるものではないのでここには並べない。
