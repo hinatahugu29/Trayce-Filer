@@ -138,6 +138,18 @@
    * 使い回してしまい、表示がタブ切り替え前のまま固まる。
    */
   let nextPaneId = 1
+
+  /**
+   * 「無い」を表す固定値。
+   *
+   * props に `?? []` や `?? {}` を直接書くと、描画のたびに新しい実体が生まれる。
+   * 子側にその prop を見る `$:` があると毎回走り、親へ返って再描画 → また新しい実体、で
+   * 無限ループになる（症状は `RangeError: Invalid array length` で画面が固まるだけで、
+   * 原因を全く示さない）。同一性を安定させておけば、子の作りに関係なく踏まない。
+   */
+  const NO_PATH_STATES: api.SavedPathState[] = []
+  const DEFAULT_SIDEBAR: api.SavedSidebarState = { primary: 'tree' }
+
   let hoveredPaneId: number | null = null
   let hotkey = ''
   let dragIcon = ''
@@ -844,8 +856,8 @@
               onTrayAdd={addTray}
               onTrayRename={renameTray}
               onTrayDelete={deleteTray}
-              savedPathStates={pane.pathStates ?? []}
-              sidebarState={pane.sidebar ?? { primary: 'tree' }}
+              savedPathStates={pane.pathStates ?? NO_PATH_STATES}
+              sidebarState={pane.sidebar ?? DEFAULT_SIDEBAR}
               onSidebarChange={(sidebar) => {
                 pane.sidebar = sidebar
                 tabs = tabs

@@ -281,6 +281,8 @@
   /** 引き始めた時点の選択。Ctrl / Shift 併用ならここへ足していく。 */
   let marqueeBase = new Set<string>()
   let autoScrollTimer: number | null = null
+  /** 自動スクロールの向き。上端なら -1、下端なら 1。引いている間に変わる。 */
+  let autoScrollDir: -1 | 1 = 1
   /** 端からこの距離まで来たら自動でスクロールする。 */
   const EDGE_PX = 24
   const EDGE_SPEED = 12
@@ -348,11 +350,14 @@
     const up = clientY - box.top < EDGE_PX
     const down = box.bottom - clientY < EDGE_PX
     if (!up && !down) return stopAutoScroll()
+    // 向きは回し続ける側から毎回読む。ここで閉じ込めると、上端から下端へ引き直した時に
+    // 最初の向きのまま送り続けてしまい、下へ広げられなくなる。
+    autoScrollDir = up ? -1 : 1
     if (autoScrollTimer !== null) return
     autoScrollTimer = window.setInterval(() => {
       if (!viewport || !marquee) return stopAutoScroll()
       const before = viewport.scrollTop
-      viewport.scrollTop += up ? -EDGE_SPEED : EDGE_SPEED
+      viewport.scrollTop += autoScrollDir * EDGE_SPEED
       const moved = viewport.scrollTop - before
       if (moved === 0) return stopAutoScroll()
       scrollTop = viewport.scrollTop

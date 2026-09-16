@@ -176,12 +176,17 @@
               class:on={siblingsAt === i}
               aria-expanded={siblingsAt === i}
               title="この階層のフォルダー一覧"
+              on:pointerdown|stopPropagation
               on:click|stopPropagation={() => openSiblings(i, crumb.path)}
             >
               ▾
             </button>
             {#if siblingsAt === i}
-              <ul class="siblings">
+              <!-- 外を押したら閉じる仕掛けは pointerdown で動くので、この中では止める。
+                   pointerdown は click より先に来る。止めないと一覧が消えてから click が
+                   飛ぶことになり、兄弟を選んでも移動しない。つまみ自身も同じ理由で止める
+                   （閉じた直後に開き直してしまい、押しても畳めなくなる）。 -->
+              <ul class="siblings" on:pointerdown|stopPropagation>
                 {#if siblingsLoading}
                   <li class="note">読み込み中…</li>
                 {:else if siblings.length === 0}
