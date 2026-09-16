@@ -256,8 +256,11 @@
       scopePaths: [path],
       query: '',
       matchPath: true,
-      sortKey: settings?.sortKey ?? 'name',
-      sortDescending: settings?.sortDescending ?? false,
+      // 検索は通常ペインと既定を分ける。フォルダを開く時は名前順が要るが、探す時は
+      // 「直近に触ったもの」から当たるのが大半で、名前順から入ると必ず並べ替え直す。
+      // 保存済みの検索は自分の指定を持っているので、ここは新しく作る時だけの話。
+      sortKey: 'modified',
+      sortDescending: true,
       dirsFirst: settings?.dirsFirst ?? true,
       showPreview: settings?.showPreview ?? false,
       showHistory: true,

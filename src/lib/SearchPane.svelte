@@ -181,6 +181,7 @@
     if (requestId) await api.cancelSearch(requestId).catch(() => {})
     const id = nextRequestId()
     requestId = id
+    stopped = false
     results = []
     scanned = 0
     running = true
@@ -197,10 +198,27 @@
     }
   }
 
+  /**
+   * 停止したまま残っているか。
+   *
+   * 停止は「読み込みを止める」ではなく「このセッションを畳む」で、読み込み済みの
+   * 索引ごと消える（索引を保ったまま止めたい時は一時停止のほう）。結果の表示は残すが、
+   * 絞り込み直しはできないので、それを言えるように状態として持つ。
+   */
+  let stopped = false
+
   async function stopSearch() {
     if (!requestId) return
-    await api.cancelSearch(requestId).catch(() => {})
-    status = '停止しています…'
+    const id = requestId
+    // id を先に手放す。残したままだと、以後の絞り込みが Rust 側で
+    // 「検索が開始されていません」になり、その文言が停止の知らせを上書きする。
+    // 完了イベントも id で振り分けているので、ここで自分の後始末まで済ませる。
+    requestId = null
+    stopped = true
+    running = false
+    paused = false
+    status = `停止しました — 読み込んだ ${scanned.toLocaleString()}件の索引は破棄しました。再読み込みで検索し直せます`
+    await api.cancelSearch(id).catch(() => {})
   }
 
   async function togglePause() {
@@ -212,7 +230,12 @@
   }
 
   function requestFilter(override: Partial<api.SearchFilterOptions> = {}) {
-    if (!requestId) return
+    if (!requestId) {
+      // 停止後に検索語をいじった時。黙って無視すると、打っても結果が変わらない理由が
+      // どこにも出ない。
+      if (stopped) status = `停止中です — 再読み込み（${hint('reload')}）で検索し直せます`
+      return
+    }
     const id = ++filterRequestId
     api.filterSearch(requestId, id, {
       query: search.query,
@@ -227,9 +250,20 @@
     })
   }
 
+  /**
+   * 列を押した時に行き着く並び。通常ペインと同じ規則にそろえる。
+   *
+   * 更新日時とサイズは降順から入る。検索は「直近に触ったものを探す」のが大半で、
+   * 昇順から入ると必ずもう一度押すことになる。
+   */
+  function nextSort(key: api.SortKey): { key: api.SortKey; descending: boolean } {
+    if (sort.key === key) return { key, descending: !sort.descending }
+    return { key, descending: key === 'modified' || key === 'size' }
+  }
+
   function sortResults(key: api.SortKey) {
-    if (sort.key === key) sort = { ...sort, descending: !sort.descending }
-    else sort = { ...sort, key, descending: false }
+    const next = nextSort(key)
+    sort = { ...sort, key: next.key, descending: next.descending }
     onSearchChange({
       ...search,
       sortKey: sort.key,
@@ -304,17 +338,37 @@
     )
   }
 
+  /** 軸は変えずに向きだけ返す。 */
+  function reverseSort() {
+    sort = { ...sort, descending: !sort.descending }
+    onSearchChange({ ...search, sortKey: sort.key, sortDescending: sort.descending })
+    requestFilter({ sortKey: sort.key, descending: sort.descending })
+  }
+
+  /** 選択が全部トレイに入っているか。入れる/外すのどちらに倒すかを決める。 */
+  function selectionAllInTray(): boolean {
+    const keys = new Set(trayItems.map(api.pathIdentity))
+    return selection.length > 0 && selection.every((path) => keys.has(api.pathIdentity(path)))
+  }
+
+  /** 選択をトレイに入れる、または全部入っていれば外す。メニューとキーの共通の入口。 */
+  function toggleTray() {
+    if (selection.length === 0) return
+    const keys = new Set(trayItems.map(api.pathIdentity))
+    const targets = selectionAllInTray()
+      ? selection
+      : selection.filter((path) => !keys.has(api.pathIdentity(path)))
+    targets.forEach(onTrayToggle)
+  }
+
   /** 選択が全部トレイにあれば「外す」、1つでも無ければ「入れる」。 */
   function trayMenuItem(): MenuItem {
-    const keys = new Set(trayItems.map(api.pathIdentity))
-    const allIn = selection.length > 0 && selection.every((path) => keys.has(api.pathIdentity(path)))
-    const targets = allIn ? selection : selection.filter((path) => !keys.has(api.pathIdentity(path)))
     return {
       kind: 'item',
-      label: allIn ? 'トレイから外す' : 'トレイに入れる',
-      hint: 'Alt+クリック',
+      label: selectionAllInTray() ? 'トレイから外す' : 'トレイに入れる',
+      hint: `Alt+クリック / ${hint('trayToggle')}`,
       disabled: selection.length === 0,
-      run: () => targets.forEach(onTrayToggle),
+      run: toggleTray,
     }
   }
 
@@ -436,6 +490,38 @@
         ev.preventDefault()
         togglePreview()
         break
+      // 並べ替えとトレイは通常ペインと同じキーで効かせる。ペインの種類によって
+      // 同じキーが黙って無反応になると、押す前に種類を確かめることになる。
+      case 'sortName':
+        if (ev.repeat) break
+        ev.preventDefault()
+        sortResults('name')
+        break
+      case 'sortSize':
+        if (ev.repeat) break
+        ev.preventDefault()
+        sortResults('size')
+        break
+      case 'sortExt':
+        if (ev.repeat) break
+        ev.preventDefault()
+        sortResults('ext')
+        break
+      case 'sortModified':
+        if (ev.repeat) break
+        ev.preventDefault()
+        sortResults('modified')
+        break
+      case 'sortReverse':
+        if (ev.repeat) break
+        ev.preventDefault()
+        reverseSort()
+        break
+      case 'trayToggle':
+        if (ev.repeat) break
+        ev.preventDefault()
+        toggleTray()
+        break
       default:
         break
     }
@@ -493,7 +579,13 @@
     <button type="button" class:on={search.matchPath} title="ファイル名だけでなくフォルダのパスも検索" on:click={toggleMatchPath}>パス</button>
     {#if running}
       <button type="button" class:on={paused} on:click={togglePause}>{paused ? '再開' : '一時停止'}</button>
-      <button type="button" class="stop" on:click={stopSearch}>停止</button>
+      <!-- 一時停止と違い、読み込み済みの索引まで捨てる。押す前に分かるようにしておく。 -->
+      <button
+        type="button"
+        class="stop"
+        title="読み込みをやめ、読み込み済みの索引も破棄する（索引を残したまま止めるなら一時停止）"
+        on:click={stopSearch}>停止</button
+      >
     {:else}
       <button type="button" disabled={!scope.trim()} title="検索対象をもう一度読み込む" on:click={() => runIndex()}>再読込</button>
     {/if}
