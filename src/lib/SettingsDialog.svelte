@@ -2,6 +2,7 @@
   import * as api from './api'
   import type { Settings, SortKey } from './api'
   import { ACTIONS, keyToString, resolveKey } from './shortcuts'
+  import * as navstats from './navstats'
   import type { ActionId } from './shortcuts'
 
   export let open = false
@@ -14,12 +15,41 @@
   /** キー入力の記録中。対象のアクション id。 */
   let capturing: ActionId | null = null
 
+  // ---- 移動の集計 ----
+  //
+  // 「俯瞰のような跳躍向けの装置に投資すべきか」は、跳躍（other）の割合と
+  // 出戻りの多さで決まる。ログを grep しないと読めないのでは判断に使われないので、
+  // ここに出す。
+  let tally = navstats.newTally()
+
+  $: tallyTotal = navstats.total(tally)
+  $: otherShare = tallyTotal ? Math.round((tally.other / tallyTotal) * 100) : 0
+  $: tallyDays = tally.since ? Math.max(1, Math.round((Date.now() - tally.since) / 86_400_000)) : 0
+
+  const KIND_LABELS: { kind: navstats.MoveKind; label: string }[] = [
+    { kind: 'parent', label: '親へ' },
+    { kind: 'child', label: '子へ' },
+    { kind: 'descendant', label: '孫以下へ' },
+    { kind: 'sibling', label: '兄弟へ' },
+    { kind: 'other', label: '跳躍（無関係な場所）' },
+  ]
+
+  function share(value: number): number {
+    return tallyTotal ? Math.round((value / tallyTotal) * 100) : 0
+  }
+
+  async function resetTally() {
+    await navstats.reset()
+    tally = navstats.snapshot()
+  }
+
   // 開くたびに現在値を読み直す。別の窓で変更された可能性がある。
   $: if (open && !draft) load()
 
   async function load() {
     try {
       draft = await api.getSettings()
+      tally = navstats.snapshot()
       error = null
     } catch (e) {
       error = String(e)
@@ -174,6 +204,51 @@
           <p class="note">
             名前が一致するフォルダの中は検索で読み込みません（大文字小文字は区別しません）。次に検索対象を読み込む時から効きます。
           </p>
+        </section>
+
+        <section>
+          <h3>移動の集計</h3>
+          <p class="note">
+            どの種別の移動が多いかを数えています。機能の取捨を推測ではなく実データで
+            決めるための材料で、外部へは送りません。
+          </p>
+
+          {#if tallyTotal === 0}
+            <p class="note">まだ移動が記録されていません。</p>
+          {:else}
+            <div class="tally">
+              {#each KIND_LABELS as row (row.kind)}
+                <div class="tally-row">
+                  <span class="tally-label">{row.label}</span>
+                  <span class="tally-bar">
+                    <span class="tally-fill" class:jump={row.kind === 'other'} style:width="{share(tally[row.kind])}%" />
+                  </span>
+                  <span class="tally-num">{tally[row.kind]}（{share(tally[row.kind])}%）</span>
+                </div>
+              {/each}
+            </div>
+
+            <p class="note">
+              合計 {tallyTotal} 件{#if tallyDays}／約 {tallyDays} 日ぶん{/if}、
+              30秒以内の出戻り {tally.quickReturns} 件
+            </p>
+
+            <!-- 判断の基準を数字のそばに置く。別の場所に書くと結局読まれない。 -->
+            <p class="note verdict">
+              {#if otherShare >= 30}
+                跳躍が {otherShare}% です。俯瞰のような跳躍向けの装置を作る価値があります。
+              {:else if otherShare <= 10}
+                跳躍は {otherShare}% です。俯瞰へ投資しても回収できない見込みです。
+              {:else}
+                跳躍は {otherShare}% です。判断できる差ではないので、もう少し貯めてください。
+              {/if}
+              {#if tally.quickReturns >= tallyTotal * 0.15}
+                出戻りが多いので、移動を速くするより「入らずに覗く」ほうが効きます。
+              {/if}
+            </p>
+
+            <button type="button" class="reset-tally" on:click={resetTally}>数え直す</button>
+          {/if}
         </section>
 
         <section>
@@ -352,6 +427,74 @@
     line-height: 1.6;
     color: #6a6a6a;
   }
+  .tally {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 8px;
+  }
+
+  .tally-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10.5px;
+  }
+
+  .tally-label {
+    flex: none;
+    width: 128px;
+    color: #a4a4a4;
+  }
+
+  .tally-bar {
+    flex: 1;
+    min-width: 0;
+    height: 8px;
+    border-radius: 2px;
+    background: #2a2a2a;
+    overflow: hidden;
+  }
+
+  .tally-fill {
+    display: block;
+    height: 100%;
+    background: #4a6b8a;
+  }
+
+  /* 判断を左右するのは跳躍の割合なので、そこだけ色を変えて目を引く。 */
+  .tally-fill.jump {
+    background: #b0863a;
+  }
+
+  .tally-num {
+    flex: none;
+    width: 92px;
+    text-align: right;
+    color: #8a8a8a;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .verdict {
+    color: #93a7b8;
+  }
+
+  .reset-tally {
+    margin-top: 8px;
+    padding: 3px 10px;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    font-size: 10.5px;
+    color: #a4a4a4;
+    background: #242424;
+    cursor: pointer;
+  }
+
+  .reset-tally:hover {
+    border-color: #4f4f4f;
+    color: #ddd;
+  }
+
   .warn {
     margin: 0 0 8px;
     padding: 6px 9px;

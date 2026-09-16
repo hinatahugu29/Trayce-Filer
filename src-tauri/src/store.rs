@@ -120,6 +120,25 @@ impl Default for SavedSearchState {
   }
 }
 
+/// ペインが訪れた場所ごとの作業状態。
+///
+/// ペインは「現在地」を1つしか持たないため、移動すると前の場所の
+/// スクロール位置・選択・絞り込みが失われる。親へ戻るのと無関係な場所へ
+/// 跳ぶのが同じコストになるのはこれが原因なので、場所をキーにして覚えておく。
+#[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SavedPathState {
+  pub path: String,
+  pub scroll_top: f64,
+  pub selected: Vec<String>,
+  pub cursor: usize,
+  /// フォルダ内絞り込み語。戻った時に「ファイルが消えている」と誤解させないよう、
+  /// 復元する側は絞り込み中であることを画面で明示すること。
+  pub filter: String,
+  pub sort_key: String,
+  pub sort_descending: bool,
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedPaneState {
@@ -137,6 +156,9 @@ pub struct SavedPaneState {
   pub selected_entry: Option<String>,
   #[serde(default)]
   pub scroll_top: Option<f64>,
+  /// 訪れた場所ごとの作業状態。新しいものが先頭の LRU で、上限は保存する側で切る。
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub path_states: Vec<SavedPathState>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -180,6 +202,54 @@ pub struct SessionState {
   pub active_tab_index: usize,
 }
 
+/// 配置テンプレートの1ペイン分。
+///
+/// `pathMode` が相対（current / parent / child）なら、適用時に指定された
+/// 基準フォルダから実際のパスを組み立てる。絶対パスで持つと単なるブックマークに
+/// なってしまい、「この形を今いる場所に当てる」ができない。
+#[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LayoutPane {
+  pub kind: PaneKind,
+  /// `absolute` / `current` / `parent` / `child`
+  pub path_mode: String,
+  /// absolute なら絶対パス、child なら基準からの相対名。それ以外では使わない。
+  pub path: String,
+  pub pinned: bool,
+  pub sidebar: Option<SavedSidebarState>,
+  /// 検索ペインとして展開する時の初期検索語。
+  pub query: String,
+}
+
+/// 名前を付けて呼び出せるペイン配置。
+///
+/// セッション（いまの状態）とは寿命が違うので別に持つ。
+#[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Layout {
+  pub name: String,
+  pub panes: Vec<LayoutPane>,
+}
+
+/// 移動種別の集計。
+///
+/// 「俯瞰のような跳躍向けの装置に投資すべきか」は、跳躍（other）の割合と
+/// 出戻りの多さで決まる。議論では決まらないので数えて判断する。
+/// 1〜2週間ぶんを見たいので、窓を閉じても消えないようここに置く。
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NavTally {
+  pub parent: u64,
+  pub child: u64,
+  pub descendant: u64,
+  pub sibling: u64,
+  pub other: u64,
+  /// 30秒以内に元の場所へ戻った回数。入らずに覗ければ要らなかった往復。
+  pub quick_returns: u64,
+  /// 数え始めた時刻(ms)。0 なら未開始。何日ぶんの数字かが分からないと判断できない。
+  pub since: u128,
+}
+
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct State {
   #[serde(default)]
@@ -192,6 +262,12 @@ pub struct State {
   pub settings: Settings,
   #[serde(default)]
   pub last_session: Option<SessionState>,
+  /// 名前付きの配置テンプレート。並び順がそのまま Ctrl+1..9 の割り当てになる。
+  #[serde(default)]
+  pub layouts: Vec<Layout>,
+  /// 移動種別の累計。
+  #[serde(default)]
+  pub nav_tally: NavTally,
 }
 
 #[derive(Default)]
@@ -442,10 +518,32 @@ pub fn clear_search_locations(app: AppHandle) {
   app.state::<Store>().with(|state| state.search_locations.clear());
 }
 
-/// 保存されている場所がまだ存在するか。消えたフォルダを一覧で灰色にするのに使う。
+/// パスの実在と種別。
+///
+/// 実在だけでは足りない。トレイはファイルとフォルダを同じ一覧に持つが、
+/// フォルダは「行き先」にもなるため、呼び出し側が動作を出し分ける必要がある。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathKind {
+  pub exists: bool,
+  pub is_dir: bool,
+}
+
+/// 実在と種別をまとめて調べる。
+///
+/// お気に入り・履歴・トレイは、消えた場所を指したまま残る。掴んでから
+/// 「開けません」と言われるより、先に灰色で示すほうが親切。
 #[tauri::command]
-pub fn paths_exist(paths: Vec<String>) -> Vec<bool> {
-  paths.iter().map(|p| Path::new(p).is_dir()).collect()
+pub fn path_kinds(paths: Vec<String>) -> Vec<PathKind> {
+  paths.iter().map(|p| path_kind(Path::new(p))).collect()
+}
+
+/// 1件ぶんの判定。テストしやすいよう I/O の呼び出し方だけを切り出す。
+fn path_kind(path: &Path) -> PathKind {
+  // is_dir() は「存在しない」と「ファイルである」を区別しない。
+  // トレイのファイルが全件「見つかりません」になっていたのはこの取り違えが原因。
+  let is_dir = path.is_dir();
+  PathKind { exists: is_dir || path.is_file(), is_dir }
 }
 
 #[tauri::command]
@@ -468,6 +566,37 @@ pub fn reset_settings(app: AppHandle) -> Settings {
   })
 }
 
+/// 移動種別の累計を取得する。
+#[tauri::command]
+pub fn get_nav_tally(app: AppHandle) -> NavTally {
+  app.state::<Store>().state.lock().unwrap().nav_tally
+}
+
+/// 移動種別の累計を保存する。フロントが一定回数ごとにまとめて送る。
+#[tauri::command]
+pub fn save_nav_tally(app: AppHandle, tally: NavTally) {
+  app.state::<Store>().with(|s| {
+    let mut next = tally;
+    // 数え始めは最初の保存時に確定させる。以後は上書きしない。
+    if next.since == 0 {
+      next.since = if s.nav_tally.since == 0 { now_ms() } else { s.nav_tally.since };
+    }
+    s.nav_tally = next;
+  });
+}
+
+/// 保存されている配置テンプレートを取得する。
+#[tauri::command]
+pub fn get_layouts(app: AppHandle) -> Vec<Layout> {
+  app.state::<Store>().state.lock().unwrap().layouts.clone()
+}
+
+/// 配置テンプレートを丸ごと差し替えて保存する。
+#[tauri::command]
+pub fn save_layouts(app: AppHandle, layouts: Vec<Layout>) {
+  app.state::<Store>().with(|s| s.layouts = layouts);
+}
+
 /// セッション状態（直前に開いていたタブとペイン）を保存する。
 /// `label` はその窓。最後に閉じた窓のセッションが次回起動時に復元される。
 #[tauri::command]
@@ -487,6 +616,25 @@ mod tests {
 
   fn paths(history: &[HistoryEntry]) -> Vec<&str> {
     history.iter().map(|e| e.path.as_str()).collect()
+  }
+
+  /// トレイはファイルとフォルダを同じ一覧に持つ。両者を取り違えると、
+  /// ファイルが全件「見つかりません」になる（実際にそうなっていた）。
+  #[test]
+  fn path_kind_separates_missing_from_file() {
+    let dir = std::env::temp_dir().join("trayce_path_kind_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let file = dir.join("note.txt");
+    std::fs::write(&file, b"x").unwrap();
+    let missing = dir.join("nope.txt");
+
+    assert_eq!(path_kind(&dir), PathKind { exists: true, is_dir: true });
+    assert_eq!(path_kind(&file), PathKind { exists: true, is_dir: false });
+    assert_eq!(path_kind(&missing), PathKind { exists: false, is_dir: false });
+
+    let _ = std::fs::remove_dir_all(&dir);
   }
 
   #[test]

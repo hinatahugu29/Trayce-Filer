@@ -22,7 +22,13 @@
 
   $: activeTray = trays.find((tray) => tray.id === activeTrayId)
 
-  let exist: boolean[] = []
+  /**
+   * 各項目の実在と種別。
+   *
+   * フォルダは運ぶ荷物であると同時に「行き先」でもある。同じ一覧に混ざるので、
+   * 種別を知らないと動作を出し分けられない。
+   */
+  let kinds: api.PathKind[] = []
   let refreshToken = 0
   let selectedKeys = new Set<string>()
   let anchor = 0
@@ -41,14 +47,25 @@
 
   async function refresh() {
     const token = ++refreshToken
-    const result = await api.pathsExist(items)
-    if (token === refreshToken) exist = result
+    const result = await api.pathKinds(items)
+    if (token === refreshToken) kinds = result
   }
+
+  /** 内訳。混ざった状態で「すべてコピー」を押す前に、何を運ぶのかが見えるようにする。 */
+  $: dirCount = kinds.filter((kind) => kind.isDir).length
+  $: fileCount = kinds.filter((kind) => kind.exists && !kind.isDir).length
 
   $: if (items) refresh()
   onMount(refresh)
 
-  function reveal(path: string) {
+  /**
+   * 項目を開く。
+   *
+   * フォルダはそこへ入る（一時的なブックマークとしての使い方）。
+   * ファイルは、それ自体を開くのはトレイの仕事ではないので、含まれる場所を開く。
+   */
+  function reveal(path: string, isDir: boolean) {
+    if (isDir) return onNavigate(path)
     const { lead } = splitPath(path)
     onNavigate(lead || path)
   }
@@ -96,7 +113,15 @@
     </div>
   {/if}
   <div class="summary">
-    <span>{items.length ? `${items.length} 件を収集中` : 'Alt+Click で項目を集める'}</span>
+    <span>
+      {#if !items.length}
+        Alt+Click で項目を集める
+      {:else}
+        {items.length} 件を収集中{#if dirCount && fileCount}<small class="breakdown"
+            >（フォルダ {dirCount} / ファイル {fileCount}）</small
+          >{/if}
+      {/if}
+    </span>
     {#if items.length}
       <button type="button" on:click={onClear}>すべて外す</button>
     {/if}
@@ -126,19 +151,41 @@
   <div class="items" tabindex="0" role="listbox" aria-label="収集トレイ" on:keydown={onKeyDown}>
     {#each items as path, i (api.pathIdentity(path))}
       {@const parts = splitPath(path)}
+      {@const kind = kinds[i]}
+      {@const missing = kind?.exists === false}
+      {@const isDir = kind?.isDir === true}
       <div
         class="item"
         class:selected={selectedKeys.has(api.pathIdentity(path))}
-        class:missing={exist[i] === false}
+        class:missing
+        class:dir={isDir}
         title={path}
         role="option"
         aria-selected={selectedKeys.has(api.pathIdentity(path))}
       >
-        <button class="open" type="button" on:click={(e) => selectItem(path, i, e)} on:dblclick={() => reveal(path)}>
-          <span class="icon">{exist[i] === false ? '⚠' : '◈'}</span>
+        {#if isDir}
+          <!-- フォルダだけが持つ動詞。選択とは当たり判定を分けるので、部分選択はそのまま使える。 -->
+          <button
+            class="go"
+            type="button"
+            title="ここへ移動"
+            on:click|stopPropagation={() => onNavigate(path)}
+          >
+            →
+          </button>
+        {:else}
+          <span class="go-space" />
+        {/if}
+        <button
+          class="open"
+          type="button"
+          on:click={(e) => selectItem(path, i, e)}
+          on:dblclick={() => reveal(path, isDir)}
+        >
+          <span class="icon">{missing ? '⚠' : isDir ? '📁' : '◈'}</span>
           <span class="text">
             <strong>{parts.tail || path}</strong>
-            <small>{exist[i] === false ? '見つかりません' : parts.lead}</small>
+            <small>{missing ? '見つかりません' : parts.lead}</small>
           </span>
         </button>
         <button class="remove" type="button" title="トレイから外す" on:click|stopPropagation={() => onRemove(path)}>×</button>
@@ -156,6 +203,7 @@
   .switcher button:disabled { opacity: .35; cursor: default; }
   .summary { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-bottom: 1px solid #2c2c2c; color: #8f9aaa; font-size: 10.5px; }
   .summary span { flex: 1; }
+  .breakdown { color: #67747c; font-size: 9.5px; }
   button { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
   .summary button { color: #8fbce8; }
   .items { flex: 1; min-height: 0; overflow: auto; padding: 4px; }
@@ -171,8 +219,17 @@
   .item:hover { background: #252b31; }
   .item.selected { background: #294b55; box-shadow: inset 2px 0 #67c8da; }
   .item.missing { opacity: .58; }
-  .open { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; padding: 6px; text-align: left; }
+  /* フォルダ行だけが持つ「行く」。普段は薄く、行に触れると濃くなる。
+     一覧のインライン展開（▸）と同じ作法で、新しく覚えることを増やさない。 */
+  .go { flex: none; width: 16px; height: 28px; color: #3f4650; font-size: 10px; }
+  .item:hover .go { color: #8fbce8; }
+  .go:hover { color: #cfe6fb; }
+  /* つまみを持たないファイル行も、名前の開始位置を揃える。 */
+  .go-space { flex: none; width: 16px; }
+  .open { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; padding: 6px 6px 6px 0; text-align: left; }
   .icon { flex: none; color: #65c5a5; }
+  /* 行き先になれるものは、運ぶだけのものと色で分ける。 */
+  .item.dir .icon { color: #8fbce8; }
   .missing .icon { color: #d7a65b; }
   .text { display: flex; flex-direction: column; min-width: 0; }
   strong, small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
