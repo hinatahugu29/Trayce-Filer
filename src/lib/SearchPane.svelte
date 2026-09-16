@@ -35,6 +35,16 @@
   $: scope = scopes.join('; ')
   $: scopeLabel = scopes.length > 1 ? `${scopes.length}か所` : splitPath(scopes[0]).tail || scopes[0]
   let results: api.SearchEntry[] = []
+
+  /**
+   * プレビューの対象。検索結果のフォルダも覗けるようにする。
+   * 通常ペインと同じく、移動せずに中身を確かめられるほうが往復が減る。
+   */
+  $: previewTarget = selection.length === 1 ? selection[0] : null
+  $: previewIsDir = previewTarget
+    ? (results.find((r) => api.pathIdentity(r.path) === api.pathIdentity(previewTarget!))?.isDir ??
+      false)
+    : false
   let selection: string[] = []
   let showPreview = search.showPreview ?? settings.showPreview
   let showHistory = search.showHistory ?? true
@@ -593,7 +603,13 @@
             />
           </div>
           {#if showPreview}
-            <div class="preview-slot"><Preview path={selection.length === 1 ? selection[0] : null} /></div>
+            <div class="preview-slot">
+              <Preview
+                path={previewTarget}
+                isDir={previewIsDir}
+                onNavigate={(target) => onOpenDirectory(target)}
+              />
+            </div>
           {/if}
         </div>
       {/if}

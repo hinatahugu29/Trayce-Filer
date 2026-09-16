@@ -22,6 +22,50 @@
     })
   })()
 
+  // ---- パンくずから兄弟へ ----
+  //
+  // 兄弟フォルダへ移るのに、一度親へ上がってから選び直すのは2操作かかる。
+  // パンくずは既に「その階層」を指しているので、そこから直接中身を出せば1操作で済む。
+  // 俯瞰のような別画面を出さずに近距離の移動を安くする、一番軽い手段。
+  let siblingsAt: number | null = null
+  let siblings: { name: string; path: string }[] = []
+  let siblingsLoading = false
+  /** 連打で古い結果が後から届いて別の階層の一覧を見せるのを防ぐ。 */
+  let siblingGeneration = 0
+
+  async function openSiblings(index: number, path: string) {
+    if (siblingsAt === index) {
+      siblingsAt = null
+      return
+    }
+    const gen = ++siblingGeneration
+    siblingsAt = index
+    siblings = []
+    siblingsLoading = true
+    try {
+      const entries = await api.listSubdirs(path, showHidden)
+      if (gen !== siblingGeneration) return
+      siblings = entries.map((entry) => ({ name: entry.name, path: api.joinPath(path, entry.name) }))
+    } catch {
+      // 権限が無い場所などは空のまま出す。移動の邪魔はしない。
+      if (gen === siblingGeneration) siblings = []
+    } finally {
+      if (gen === siblingGeneration) siblingsLoading = false
+    }
+  }
+
+  function closeSiblings() {
+    siblingsAt = null
+    siblingGeneration++
+  }
+
+  // 場所が変われば、開いたままの一覧は別の階層のものになる。閉じる。
+  let lastPath = ''
+  $: if (path !== lastPath) {
+    lastPath = path
+    closeSiblings()
+  }
+
   // ---- アドレスバー ----
   //
   // 常時テキスト欄にすると、このアプリの肝である「末尾フォルダ名が主役」が
@@ -86,6 +130,8 @@
   「末尾のフォルダ名」と「色」なので、その2つを最優先で読ませる。
   色帯を左端に置いているのは、窓が右方向に隠れても左端は残りやすいため。
 -->
+<svelte:window on:pointerdown={closeSiblings} />
+
 <header style="--hue: {hue}">
   <div class="band" />
   <div class="text">
@@ -122,7 +168,48 @@
     {:else}
       <nav class="lead">
         {#each crumbs as crumb, i}
-          <button type="button" on:click={() => onNavigate(crumb.path)}>{crumb.label}</button>
+          <span class="crumb">
+            <button type="button" on:click={() => onNavigate(crumb.path)}>{crumb.label}</button>
+            <button
+              type="button"
+              class="drop"
+              class:on={siblingsAt === i}
+              aria-expanded={siblingsAt === i}
+              title="この階層のフォルダー一覧"
+              on:pointerdown|stopPropagation
+              on:click|stopPropagation={() => openSiblings(i, crumb.path)}
+            >
+              ▾
+            </button>
+            {#if siblingsAt === i}
+              <!-- 外を押したら閉じる仕掛けは pointerdown で動くので、この中では止める。
+                   pointerdown は click より先に来る。止めないと一覧が消えてから click が
+                   飛ぶことになり、兄弟を選んでも移動しない。つまみ自身も同じ理由で止める
+                   （閉じた直後に開き直してしまい、押しても畳めなくなる）。 -->
+              <ul class="siblings" on:pointerdown|stopPropagation>
+                {#if siblingsLoading}
+                  <li class="note">読み込み中…</li>
+                {:else if siblings.length === 0}
+                  <li class="note">フォルダーはありません</li>
+                {:else}
+                  {#each siblings as sibling (sibling.path)}
+                    <li>
+                      <button
+                        type="button"
+                        class:here={api.pathIdentity(sibling.path) === api.pathIdentity(path)}
+                        on:click={() => {
+                          closeSiblings()
+                          onNavigate(sibling.path)
+                        }}
+                      >
+                        {sibling.name}
+                      </button>
+                    </li>
+                  {/each}
+                {/if}
+              </ul>
+            {/if}
+          </span>
           {#if i < crumbs.length - 1}<span class="sep">›</span>{/if}
         {/each}
         <button
@@ -198,6 +285,72 @@
   }
   .sep {
     color: #555;
+  }
+
+  /* パンくず1つ分。兄弟一覧はこの中に絶対配置する。 */
+  .crumb {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* 開く印は普段ほぼ見えない濃さにする。パンくずの文字を邪魔しないため。 */
+  .crumb .drop {
+    padding: 1px 1px;
+    font-size: 8px;
+    color: #4a4a4a;
+  }
+
+  .crumb:hover .drop,
+  .crumb .drop.on {
+    color: #9a9a9a;
+  }
+
+  .siblings {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 6;
+    margin: 2px 0 0;
+    padding: 3px;
+    min-width: 150px;
+    max-width: 320px;
+    max-height: 280px;
+    overflow: auto;
+    list-style: none;
+    background: #242424;
+    border: 1px solid #454545;
+    border-radius: 4px;
+    box-shadow: 0 6px 18px #0009;
+  }
+
+  .siblings button {
+    display: block;
+    width: 100%;
+    padding: 3px 6px;
+    text-align: left;
+    font-size: 11px;
+    color: #c4c4c4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .siblings button:hover {
+    background: #34506b;
+    color: #eee;
+  }
+
+  /* いま開いている場所。一覧の中で自分の位置が分かると、隣へ動く判断が速い。 */
+  .siblings button.here {
+    color: hsl(var(--hue) 70% 68%);
+    font-weight: 600;
+  }
+
+  .siblings .note {
+    padding: 4px 6px;
+    font-size: 10px;
+    color: #6a6a6a;
   }
 
   /* 末尾のフォルダ名。ここが一番大きい。 */

@@ -84,12 +84,25 @@ pub fn run() {
         instance::serve(guard, move || windows::focus_most_recent_window(&handle));
       }
 
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
+      // ログは release でも要る。
+      //
+      // 移動種別の計測（[nav] 行）は「俯瞰を作るべきか」を実データで決めるための
+      // 唯一の材料だが、日常使いは release ビルドなので、debug だけに出しても貯まらない。
+      // debug は今まで通り標準出力へ、release はログファイルへ書く。
+      {
+        let mut builder = tauri_plugin_log::Builder::default()
+          .level(log::LevelFilter::Info)
+          // ファイルは常に書く。後から読み返せなければ計測の意味がない。
+          .target(tauri_plugin_log::Target::new(
+            tauri_plugin_log::TargetKind::LogDir { file_name: None },
+          ));
+        // 開発中は手元でそのまま流れるほうが速い。
+        if cfg!(debug_assertions) {
+          builder = builder.target(tauri_plugin_log::Target::new(
+            tauri_plugin_log::TargetKind::Stdout,
+          ));
+        }
+        app.handle().plugin(builder.build())?;
       }
 
       // ホットキーは OS 全体に登録するので、他アプリが前面でも効く。
@@ -196,10 +209,14 @@ pub fn run() {
       store::record_search_location,
       store::remove_search_location,
       store::clear_search_locations,
-      store::paths_exist,
+      store::path_kinds,
       store::get_settings,
       store::save_settings,
       store::reset_settings,
+      store::get_nav_tally,
+      store::save_nav_tally,
+      store::get_layouts,
+      store::save_layouts,
       store::save_session_state,
       store::get_session_state,
       archive::compress_to_zip,

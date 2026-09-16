@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import { listen } from '@tauri-apps/api/event'
   import type { UnlistenFn } from '@tauri-apps/api/event'
   import PathBar from './PathBar.svelte'
@@ -14,8 +14,12 @@
   import { createConflictPrompt, type ConflictRequest } from './conflicts'
   import FolderSummary from './FolderSummary.svelte'
   import { resolveKey, matchAction } from './shortcuts'
+  import { relativeTo } from './layouts'
+  import { splitPath } from './api'
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
   import * as api from './api'
+  import * as prefetch from './prefetch'
+  import * as navstats from './navstats'
   import type { Entry, Listing, SortKey } from './api'
 
   export let initialPath: string
@@ -34,9 +38,12 @@
   export let onPathChange: (path: string) => void = () => {}
   /** 設定ダイアログを開く。窓レベルで1つだけ持つので親へ委ねる。 */
   export let onOpenSettings: () => void = () => {}
+  /** 配置（ペインの並びの型）を開く。タブ全体の話なので親が持つ。 */
+  export let onOpenLayouts: () => void = () => {}
   export let onNote: (message: string) => void = () => {}
   export let onSplit: (path: string) => void = () => {}
-  export let onSplitSearch: (path: string) => void = () => {}
+  /** 隣に検索ペインを足す。query を渡すと、その語を入れた状態で開く。 */
+  export let onSplitSearch: (path: string, query?: string) => void = () => {}
   export let onClose: () => void = () => {}
   export let onDetach: (path: string) => void = () => {}
   /**
@@ -60,11 +67,95 @@
   export let onTrayAdd: () => void = () => {}
   export let onTrayRename: (id: number) => void = () => {}
   export let onTrayDelete: (id: number) => void = () => {}
+  /** セッションから復元する、場所ごとの作業状態。新しいものが先頭。 */
+  export let savedPathStates: api.SavedPathState[] = []
   export let sidebarState: api.SavedSidebarState = { primary: 'tree' }
   export let onSidebarChange: (state: api.SavedSidebarState) => void = () => {}
 
   let listing: Listing | null = null
   let error: string | null = null
+
+  // ---- 場所ごとの作業状態 ----
+  //
+  // ペインの「現在地」は1つしかないので、移動すると前の場所のスクロール位置・
+  // 選択・絞り込み・並べ替えが消える。これが「親へ戻るのも、無関係な場所へ跳ぶのも
+  // 同じコスト」の正体なので、場所をキーにして覚えておき、戻った時に作業の続きから
+  // 再開できるようにする。
+  //
+  // Map は挿入順を保つので、これだけで LRU になる（触るたびに delete → set）。
+  const PATH_STATE_CAP = 32
+  const pathStates = new Map<string, api.SavedPathState>(
+    savedPathStates.map((st) => [api.pathIdentity(st.path), st] as const).reverse()
+  )
+
+  /** 離れる直前の場所の見え方をしまう。 */
+  function stashPathState() {
+    if (!listing || !fileList) return
+    const key = api.pathIdentity(listing.path)
+    const view = fileList.captureView()
+    pathStates.delete(key)
+    pathStates.set(key, {
+      path: listing.path,
+      scrollTop: view.scrollTop,
+      selected: view.selected,
+      cursor: view.cursor,
+      filter,
+      sortKey: sort.key,
+      sortDescending: sort.descending,
+    })
+    // 上限を超えたら最も古いものから捨てる。
+    while (pathStates.size > PATH_STATE_CAP) {
+      const oldest = pathStates.keys().next().value
+      if (oldest === undefined) break
+      pathStates.delete(oldest)
+    }
+  }
+
+  /** セッション保存用。新しいものが先頭になるよう逆順で渡す。 */
+  export function capturePathStates(): api.SavedPathState[] {
+    stashPathState()
+    return [...pathStates.values()].reverse()
+  }
+
+  // ---- 進む（分岐の記憶） ----
+  //
+  // ブラウザの「進む」は一本道だが、フォルダは木なので「A・B・C を見て回り、
+  // B に戻ってから C へ」という動きになる。どの場所からどこへ潜っていたかを
+  // 場所ごとに覚えておけば、そこへの再突入が1操作で済む。
+  const forwardMemory = new Map<string, string>()
+  /** 1つ前にいた場所と、いまの場所へ着いた時刻。出戻りの速さを測るのに使う。 */
+  let previousPath: string | null = null
+  let arrivedAt: number | null = null
+  /** いまの場所から、直前に潜っていた子。無ければ null。 */
+  let forwardTo: string | null = null
+
+  $: forwardLabel = forwardTo ? splitPath(forwardTo).tail || forwardTo : ''
+
+  function rememberBranch(from: string | null, to: string) {
+    if (!from) return
+    // 上がった時だけ覚える。潜った先は今まさに見ているので覚える意味がない。
+    if (relativeTo(to, from)) forwardMemory.set(api.pathIdentity(to), from)
+  }
+
+  /**
+   * 絞り込みを、そのまま下位フォルダの検索へ引き継ぐ。
+   *
+   * 絞り込みは1階層しか見ないので、「この辺にあるはず」が外れると手が止まる。
+   * ここで検索ペインへ渡せば、階層を降りる作業そのものを検索で置き換えられる。
+   * 検索の土台（ルート指定・条件式）は既にあるので、繋ぐだけで済む。
+   */
+  function promoteFilterToSearch() {
+    if (!listing || !filter.trim()) return
+    onSplitSearch(listing.path, filter)
+  }
+
+  /**
+   * 絞り込み語を復元した時に立てる印。
+   *
+   * 語だけ黙って戻すと「ファイルが消えている」と誤解する。復元したことが
+   * 分かるように入力欄を強調し、一度でも触ったら印は下ろす。
+   */
+  let filterRestored = false
 
   /**
    * サイドバー（ツリー / お気に入り / 履歴）の表示。
@@ -111,6 +202,21 @@
    */
   let showPreview = settings.showPreview
   let previewWidth = 260
+
+  /**
+   * プレビューの対象。単一選択のみ扱う（複数だと「どれのことか」が紛らわしい）。
+   *
+   * フォルダも対象にする。「入ってみたが違ったので戻る」という一番多い往復を、
+   * 移動せずに済ませるため。
+   */
+  $: previewTarget = selection.length === 1 ? selection[0] : null
+  $: previewIsDir = previewTarget
+    ? (allEntries.find(
+        (e) =>
+          api.pathIdentity(api.joinPath(listing?.path ?? '', e.name)) ===
+          api.pathIdentity(previewTarget!)
+      )?.is_dir ?? false)
+    : false
 
   // 幅のドラッグ調整。狭すぎ・広すぎを防ぐ。
   const TREE_MIN = 120
@@ -189,25 +295,65 @@
       onPinnedNavigate(path)
       return
     }
+    // 離れる前に、いまの場所の見え方をしまう。戻ってきた時にここから再開する。
+    stashPathState()
+
+    const previous = listing?.path ?? null
+    const leftAt = arrivedAt
+    const before = previousPath
+
+    // 並べ替えは一覧を引く前に決める必要がある。前回この場所を見た時の並びで引く。
+    const remembered = pathStates.get(api.pathIdentity(path))
+    if (remembered) {
+      sort = { ...sort, key: remembered.sortKey, descending: remembered.sortDescending }
+    }
+
     try {
       const t0 = performance.now()
-      listing = await api.listDir(path, sort)
+      // 直前まで見ていた場所へ戻る時は控えが効く。往復の体感を消すのが狙い。
+      listing = await prefetch.listDir(path, sort)
       const took = Math.round(performance.now() - t0)
       if (took >= SLOW_LOAD_MS) {
         api.logUi('warn', `読み込みに ${took}ms: ${listing.entries.length}件 ${path}`)
       }
       error = null
-      filter = '' // 場所が変われば絞り込みも意味を失う
+      // 覚えていればその場所での絞り込みを戻し、初めての場所なら空にする。
+      filter = remembered?.filter ?? ''
+      filterRestored = !!filter
+
+      // 記録は移動が成立してから。読めずに終わった場所を「行った」と数えない。
+      rememberBranch(previous, listing.path)
+      // どの種別の移動が多いかを数える。どこへ投資すべきかを推測ではなく実データで決めるため。
+      navstats.track(previous, listing.path, before, leftAt)
+
+      forwardTo = forwardMemory.get(api.pathIdentity(listing.path)) ?? null
+      previousPath = previous
+      arrivedAt = Date.now()
       onPathChange(listing.path)
       await rewatch(listing.path)
       // アドレスバーやツリーから来た場合、焦点がそこに残っている。
       // 一覧に戻さないと、移動直後にキーボードが効かない。
       fileList?.focusList()
 
+      // 一覧が新しい場所で描き終わってから戻す。FileList は path が変わった時点で
+      // スクロールと選択を捨てるので、その後でなければ上書きされる。
+      if (remembered) {
+        await tick()
+        await fileList?.restoreView({
+          scrollTop: remembered.scrollTop,
+          selected: remembered.selected,
+          cursor: remembered.cursor,
+        })
+      }
+
       // 訪れた場所を履歴に積む。ここが「さっき見てたやつ」を辿る唯一の入口。
       await api.recordHistory(listing.path)
       await syncFavoriteState()
       sidebar?.refresh()
+
+      // 親と、見えている子フォルダを裏で読んでおく。次の一手はほぼこのどれか。
+      // ここ自体が遅かった場所（ネットワークドライブなど）では対象を絞る。
+      prefetch.warm(listing, sort, took)
     } catch (e) {
       error = String(e)
     }
@@ -218,7 +364,10 @@
   export async function reload() {
     if (!listing) return
     try {
+      // 引き直しが目的なので控えは使わない。読めた内容で控えを差し替える。
+      prefetch.invalidate(listing.path)
       listing = await api.listDir(listing.path, sort)
+      prefetch.remember(listing, sort)
       error = null
     } catch (e) {
       error = String(e)
@@ -724,6 +873,7 @@
           { kind: 'item', label: '再読み込み', hint: hint('reload'), run: reload },
           { kind: 'item', label: sort.showHidden ? '隠しファイルを隠す' : '隠しファイルを表示', run: toggleHidden },
           { kind: 'sep' },
+          { kind: 'item', label: '配置…', hint: hint('layouts'), run: onOpenLayouts },
           { kind: 'item', label: '設定…', hint: hint('settings'), run: onOpenSettings },
         ]
 
@@ -798,6 +948,10 @@
         ev.preventDefault()
         onOpenSettings()
         break
+      case 'layouts':
+        ev.preventDefault()
+        onOpenLayouts()
+        break
       case 'hoverParent':
         if (ev.repeat || !listing?.parent) break
         ev.preventDefault()
@@ -864,6 +1018,8 @@
     // ただし通知が途切れない間（大量コピーの受け側など）待ち続けると一覧が全く更新されないので、
     // 最初の通知から一定時間経ったら溜まっていても読み直す。
     unlistenFs = await listen<string>(api.FS_CHANGED, (ev) => {
+      // 自分が見ていない場所でも、控えたままだと古い内容を見せてしまう。
+      prefetch.invalidate(ev.payload)
       if (ev.payload !== listing?.path) return
       if (reloadTimer !== null) clearTimeout(reloadTimer)
       const now = Date.now()
@@ -919,6 +1075,16 @@
     showHidden={sort.showHidden}
   >
     <div class="actions">
+      {#if forwardTo}
+        <button
+          type="button"
+          class="forward"
+          title={`さっき潜っていた「${forwardLabel}」へ戻る`}
+          on:click={() => forwardTo && open(forwardTo)}
+        >
+          ↘{forwardLabel}
+        </button>
+      {/if}
       <button
         type="button"
         title={isFavorite ? 'お気に入りから外す' : 'お気に入りに登録'}
@@ -961,6 +1127,13 @@
         on:pointerenter={refreshUndoState}
         on:click={undo}>↩</button
       >
+      <button
+        type="button"
+        title={`配置（ペインの並びを保存・呼び出し） (${hint('layouts')})`}
+        on:click={onOpenLayouts}
+      >
+        ⊞
+      </button>
       <button type="button" title="新しいフォルダー" on:click={newFolder}>＋</button>
       <button
         type="button"
@@ -1063,21 +1236,39 @@
     {/if}
 
     <div class="list-slot">
-      <div class="filter">
+      <div class="filter" class:restored={filterRestored}>
         <input
           bind:this={filterInput}
           bind:value={filter}
           placeholder="このフォルダ内を絞り込み (Ctrl+F)"
           spellcheck="false"
           aria-label="絞り込み"
+          title={filterRestored ? '前回この場所で使っていた絞り込みを復元しました' : ''}
+          on:input={() => (filterRestored = false)}
           on:keydown={(e) => {
+            filterRestored = false
             if (e.key === 'Escape') {
               filter = ''
               filterInput?.blur()
+            } else if (e.key === 'Enter' && e.ctrlKey) {
+              e.preventDefault()
+              promoteFilterToSearch()
             }
           }}
         />
+        {#if filterRestored}
+          <span class="restored-tag" title="前回この場所で使っていた絞り込みを復元しました">復元</span>
+        {/if}
         {#if filter}
+          <button
+            type="button"
+            class="promote"
+            class:urge={entries.length === 0}
+            title="この語のまま、ここより下を検索する (Ctrl+Enter)"
+            on:click={promoteFilterToSearch}
+          >
+            ⌕下位も
+          </button>
           <span class="hits">{entries.length} / {allEntries.length}</span>
           <button type="button" title="絞り込みを解除" on:click={() => (filter = '')}>✕</button>
         {/if}
@@ -1085,6 +1276,8 @@
 
       <FileList
         bind:this={fileList}
+        dense={multi && !active}
+        expandable={true}
         {entries}
         parent={listing?.parent ?? null}
         path={listing?.path ?? ''}
@@ -1140,7 +1333,11 @@
         on:pointerdown|stopPropagation={() => (resizingPreview = true)}
       />
       <div class="preview-slot" style="width: {previewWidth}px">
-        <Preview path={selection.length === 1 ? selection[0] : null} />
+        <Preview
+          path={previewTarget}
+          isDir={previewIsDir}
+          onNavigate={(target) => open(target)}
+        />
       </div>
     {/if}
   </div>
@@ -1311,6 +1508,59 @@
     font-size: 11px;
     outline: none;
   }
+  /* 絞り込みを復元した場所では、黙って項目が減っているように見えないよう印を出す。 */
+  /* 直前に潜っていた子への再突入。名前を出さないと、どこへ進むのか分からない。 */
+  .actions .forward {
+    max-width: 130px;
+    padding: 1px 6px;
+    font-size: 10px;
+    color: #9fb8cc;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .actions .forward:hover {
+    color: #d8e8f5;
+  }
+
+  .filter.restored input {
+    border-color: #6b5a2a;
+    background: #262115;
+  }
+
+  /* 絞り込みで見つからない時こそ押してほしいので、0件では目立たせる。 */
+  .promote {
+    flex: none;
+    padding: 1px 6px;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    font-size: 9.5px;
+    color: #9a9a9a;
+    background: #242424;
+    cursor: pointer;
+  }
+
+  .promote:hover {
+    border-color: #4f4f4f;
+    color: #ddd;
+  }
+
+  .promote.urge {
+    border-color: #4a6b8a;
+    color: #cfe2f2;
+    background: #2f4257;
+  }
+
+  .restored-tag {
+    flex: none;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9.5px;
+    color: #d8b75e;
+    background: #3a3117;
+  }
+
   .filter input:focus {
     border-color: #4c9aff;
   }

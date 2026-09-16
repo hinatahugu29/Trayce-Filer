@@ -50,10 +50,13 @@
   export async function refresh() {
     favorites = await api.listFavorites()
     history = await api.listHistory()
-    ;[favoritesExist, historyExist] = await Promise.all([
-      api.pathsExist(favorites),
-      api.pathsExist(history.map((h) => h.path)),
+    const [favoriteKinds, historyKinds] = await Promise.all([
+      api.pathKinds(favorites),
+      api.pathKinds(history.map((h) => h.path)),
     ])
+    // ここは場所だけを並べる欄なので、ファイルに置き換わっていたら「無い」と同じに扱う。
+    favoritesExist = favoriteKinds.map((kind) => kind.isDir)
+    historyExist = historyKinds.map((kind) => kind.isDir)
   }
 
   // 表示中のタブが変わった時と、場所が変わった時に取り直す。

@@ -32,6 +32,7 @@ export type ActionId =
   | 'hoverSplitPane'
   | 'hoverSplitSearchPane'
   | 'hoverPreview'
+  | 'layouts'
 
 export type ActionDef = {
   id: ActionId
@@ -39,7 +40,7 @@ export type ActionDef = {
   /** 組み込みの既定キー。設定で上書きできる。 */
   fallback: string
   /** 設定画面での並び分け。 */
-  group: '移動' | '編集' | 'タブ' | '左手操作' | 'その他'
+  group: '移動' | '編集' | 'タブ' | '配置' | '左手操作' | 'その他'
 }
 
 export const ACTIONS: ActionDef[] = [
@@ -72,6 +73,10 @@ export const ACTIONS: ActionDef[] = [
   { id: 'hoverSplitPane', label: 'ポインター先を分割', fallback: 'N', group: '左手操作' },
   { id: 'hoverSplitSearchPane', label: '検索ペインを隣に追加', fallback: 'Shift+N', group: '左手操作' },
   { id: 'hoverPreview', label: 'ポインター先のプレビュー', fallback: 'Space', group: '左手操作' },
+
+  // 保存した配置そのものは Ctrl+1..9 で直接呼ぶ。番号は一覧の並び順から決まる
+  // 位置指定で、アクション1つ1つに割り当てるものではないのでここには並べない。
+  { id: 'layouts', label: '配置を開く', fallback: 'Ctrl+E', group: '配置' },
 
   { id: 'settings', label: '設定を開く', fallback: 'Ctrl+,', group: 'その他' },
 ]

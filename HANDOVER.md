@@ -56,6 +56,9 @@ results available as normal copy/move/preview/tray sources.
 - [ ] Everyday-use follow-up — not exercised in the running app: Explorer clipboard round trips, native shell menu (submenus such as Send To may be empty because IContextMenu2/3 messages are not forwarded), properties dialog, Alt+D
 - [ ] Review follow-up — reduce per-entry search cache memory (four owned strings per entry) if multi-million-entry roots become common
 - [ ] Review follow-up — split `fs_ops.rs` (listing / transfer / clipboard / preview) and continue the gradual `Pane.svelte` extraction
+- [x] Navigation-cost round — per-place view state, folder peek, in-place expansion, breadcrumb siblings, branch memory, filter-to-search promotion, adaptive prefetch, named pane layouts, window identity, attention-based column gradation, box selection, move-kind measurement, tray waypoints
+- [ ] **Measurement window (next action)** — use the app normally for 1–2 weeks, then read Settings → 移動の集計 and decide the next investment from the data rather than from argument. Thresholds are printed next to the numbers
+- [ ] Deferred until the measurement says so — an overview/teleport surface for Trayce, tray cycling (next/previous waypoint on one key), tray folder rows as drop targets
 
 ## Current status
 
@@ -134,6 +137,10 @@ results available as normal copy/move/preview/tray sources.
 - `src/lib/Sidebar.svelte`: tree/favorites/history tabs; tray UI belongs here.
 - `src/lib/Workbench.svelte`: existing single-item card-to-card transfer.
 - `src/lib/api.ts`, `src-tauri/src/store.rs`: persisted session types.
+- `src/lib/layouts.ts`: pure anchor-relative layout maths (capture / resolve / describe). Also exports `parentOf` and `relativeTo`, reused by `navstats.ts` and `Pane.svelte`.
+- `src/lib/prefetch.ts`: short-lived listing cache, adaptive warming, and the generation token that drops work for a place already left.
+- `src/lib/navstats.ts`: move classification and the persisted tally. Deliberately only produces evidence; it never changes behaviour.
+- `src/lib/LayoutPalette.svelte`: the `Ctrl+E` palette. `Ctrl+1`..`9` are positional and handled in `Filer.svelte`, not registered as individual actions.
 - `src-tauri/src/transfer.rs`, `src-tauri/src/undo.rs`: progress/cancel/undo pipeline to reuse.
 - `E:\CODE\Antigravity\File_Search_APP\src\query.rs`: reference semantics for AND/OR/NOT queries.
 - `E:\CODE\Antigravity\File_Search_APP\src\scanner.rs`, `search_worker.rs`: reference architecture for incremental background search; adapt concepts instead of coupling the two executables.
@@ -219,6 +226,56 @@ Each slice gets its own implementation commit followed by verification and a han
 - 2026-09-13: Ran automated GUI verification against a release build (PrintWindow capture plus synthetic input, with `state.json` backed up and later restored by hash). Confirmed in the running app: a second launch exits with code 0 and leaves one process, full-width katakana typed into the folder filter matches a half-width katakana file, and the collision dialog appears with the colliding name. The dialog showed focused and hovered choices identically, fixed in `519006c`. The run was stopped when later clicks and a paste landed on another maximized application (the Claude desktop app) because the desktop was in use; Filer had exited normally (exit-time state flush observed, no crash events). Skip/keep-both results from that run are not treated as verified.
 - 2026-09-13: Completed the hardening and feature round in fourteen commits: shared Rust/TypeScript normalization fixture and Windows CI; overwrite undo restoring Recycle Bin originals; skip-aware progress totals and removal of unused synchronous commands; separate dev/release single-instance locks; shared collision prompt; search `ext:`/`size:`/`modified:`/`type:` filters; configurable search folder exclusions; pane pinning with navigation redirection; bulk rename with preview, two-phase apply, rollback, and single-step undo; per-pane transfer queue, including a fix for completion events that arrived before `start_transfer` returned; on-demand folder size; named trays per tab with backward-compatible sessions. Verification passed with 0 Svelte diagnostics, 57 frontend tests, 115 Rust tests (1 ignored benchmark), production build, and diff checks.
 - 2026-09-13: With the desktop explicitly free, resumed automated GUI verification on a fresh release build. Input helpers now abort (instead of warning) when the target point is not Filer or Filer is not the foreground window, and Filer is brought forward through its own single-instance focus hand-off. Confirmed on disk and on screen: Skip leaves the destination untouched; Keep both creates `report (2).txt`; the dialog distinguishes focused and hovered choices; bulk rename with `trip_{n}` numbers files in display order and Ctrl+Z restores the original names; `ext:png size:>1mb` returns only the 3 MB image and `type:dir` only the folder; `node_modules` is not indexed; a pinned pane stays put and a folder opened from it appears in a new pane with a note; a directory pane plus a search pane with its query restore after restart. The run exposed a real layout defect in narrow directory panes (toolbar crushing the breadcrumb, file names hidden because the list lacked a size container), fixed in `9d7293f` and re-verified. `state.json` was backed up before the run and restored by hash afterwards.
+
+- 2026-09-16: Completed the navigation-cost round in `caaa30f`. The problem addressed: like every other file manager, switching folders replaced the whole view, so returning to the parent cost exactly as much as jumping to an unrelated drive — nothing made near places cheaper than far ones. Landed on three fronts (make going back free, avoid going down at all, make the move itself faster) plus named pane layouts, window identity, attention-based column gradation, box selection, and move-kind measurement.
+
+  Three real defects were found by tests written alongside the code, not by review:
+  - `relativeTo` matched `C:workbench` as a child of `C:work`, because `pathIdentity` strips the trailing separator before the prefix comparison.
+  - Prefetch counted the parent slot against the child budget, so a drive root with no parent still fetched one child on a slow source — exactly the case the slow-source guard exists for.
+  - `paths_exist` answered with `is_dir`, so **every file in the tray had always been shown as missing**. This was pre-existing and unrelated to the round; it surfaced while giving tray folders their own verb.
+
+  Prefetch is adaptive rather than path-based: a mapped network drive (`T:...` here, observed at 711ms) cannot be told from a local one by its path, so the decision uses the measured time of the preceding read. At most two requests are in flight and queued work for an abandoned place is dropped.
+
+  Logging had been registered only under `cfg!(debug_assertions)`, so the measurement built this round would have produced nothing in the builds actually used day to day. It now writes to the log directory in both profiles, and to stdout additionally in debug.
+
+  Verification: 0 Svelte diagnostics, 103 frontend tests, 119 Rust tests (1 ignored benchmark), production web build, debug and release Tauri builds. Confirmed in the running app: both builds start, restore the session, and write to `logsTrayce.log`; no errors logged. Not exercised automatically: box selection and auto-scroll, in-place expansion, layout capture/apply, and the tray `→` button — all were checked by the author in the running app instead.
+
+## Resuming this work elsewhere
+
+Everything needed to continue is in the repository; nothing lives only on the machine it was written on.
+
+```bash
+git clone https://github.com/hinatahugu29/Trayce-Filer.git
+cd Trayce-Filer
+npm install
+npm run check && npx vitest run && cargo test --manifest-path src-tauri/Cargo.toml
+npm run tauri:build -- --no-bundle   # exe only; drop the flag for installers
+```
+
+Two things are **not** in the repository and do not transfer:
+
+- `%APPDATA%dev.filer.appstate.json` — favourites, history, sessions, saved layouts, and the move tally. A new machine starts empty, so its measurement starts from zero.
+- `%LOCALAPPDATA%dev.filer.applogsTrayce.log` — the `[nav]` summaries. Copy it if the numbers from a particular machine matter.
+
+Consequently the measurement window should be run on **one** machine. Mixing two machines' tallies is not possible, and neither is meaningful on its own if the work is split across both.
+
+### Where the current design reasoning lives
+
+- `SPEC.md` §3.6, §3.7 — the two principles this round added, written product-facing.
+- `SPEC.md` §9 — what is deferred and the numeric thresholds that decide it.
+- Commit `caaa30f` — the reasoning per change, in the message body.
+
+### The decision this round was built to enable
+
+An overview/teleport surface (a map of ancestors and descendants) is attractive but pays for itself only if it replaces three or more operations; reading a map costs 1–2 seconds where `Q` costs 0.2. So it must not take on short moves, and whether it is worth building at all depends on how often long moves actually happen.
+
+Settings → 移動の集計 answers that:
+
+- jumps (`other`) **≥ 30%** — build it
+- jumps **≤ 10%** — do not; it cannot repay the reading cost
+- quick turnarounds high — improve peeking instead of movement
+
+Trayce and ChainFlow Filer are separate products on separate axes (many windows versus one screen) and are not converging. A mechanism that wins on one axis can lose on the other: chaining panes buys back pixels in ChainFlow, where pixels are scarce, but in Trayce it would add constraint with nothing bought. Move the idea, not the form.
 
 ## Commit log
 
@@ -311,3 +368,4 @@ Each slice gets its own implementation commit followed by verification and a han
 - `be9e2bb` — `feat: keep several named collection trays per tab`
 - `fd60d00` — `docs: record hardening round and new features`
 - `9d7293f` — `fix: keep narrow directory panes readable`
+- `caaa30f` — `feat: make returning to a place cheaper than travelling to a new one`

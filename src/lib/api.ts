@@ -111,7 +111,14 @@ export const removeSearchLocation = (paths: string[]) => invoke<void>('remove_se
 export const clearSearchLocations = () => invoke<void>('clear_search_locations')
 
 /** 保存されている場所がまだ存在するか。消えたフォルダを灰色にするのに使う。 */
-export const pathsExist = (paths: string[]) => invoke<boolean[]>('paths_exist', { paths })
+/**
+ * パスの実在と種別。
+ *
+ * 実在だけでは足りない。トレイはファイルとフォルダを同じ一覧に持ち、
+ * フォルダは「行き先」にもなるため、呼ぶ側が動作を出し分ける必要がある。
+ */
+export type PathKind = { exists: boolean; isDir: boolean }
+export const pathKinds = (paths: string[]) => invoke<PathKind[]>('path_kinds', { paths })
 
 export const homeDir = () => invoke<string>('home_dir')
 export const listDir = (path: string, sort?: SortSpec) => invoke<Listing>('list_dir', { path, sort })
@@ -373,6 +380,22 @@ export type SavedSearchState = {
   showHistory?: boolean
   recentQueries?: string[]
 }
+/**
+ * ペインが訪れた場所ごとの作業状態。
+ *
+ * ペインの「現在地」は1つしかないため、移動すると前の場所のスクロール位置・選択・
+ * 絞り込みが失われる。親へ戻るのと無関係な場所へ跳ぶのが同じコストになるのは
+ * これが原因なので、場所をキーにして覚えておく。
+ */
+export type SavedPathState = {
+  path: string
+  scrollTop: number
+  selected: string[]
+  cursor: number
+  filter: string
+  sortKey: SortKey
+  sortDescending: boolean
+}
 export type SavedPaneState = {
   path: string
   kind?: PaneKind
@@ -382,6 +405,8 @@ export type SavedPaneState = {
   sidebar?: SavedSidebarState
   selectedEntry?: string
   scrollTop?: number
+  /** 訪れた場所ごとの作業状態。新しいものが先頭の LRU。 */
+  pathStates?: SavedPathState[]
 }
 /** 目的別に分けた収集トレイ。 */
 export type SavedTray = { name: string; paths: string[] }
@@ -402,6 +427,49 @@ export type SessionState = { tabs: SavedTabState[]; activeTabIndex: number }
 export const saveSessionState = (label: string, session: SessionState) =>
   invoke<void>('save_session_state', { label, session })
 export const getSessionState = () => invoke<SessionState | null>('get_session_state')
+
+/**
+ * 配置テンプレートの1ペイン分。
+ *
+ * `pathMode` が相対（current / parent / child）なら、適用時に基準フォルダから
+ * 実際のパスを組み立てる。絶対パスで持つと単なるブックマークになってしまい、
+ * 「この形を今いる場所に当てる」ができない。
+ */
+export type LayoutPathMode = 'absolute' | 'current' | 'parent' | 'child'
+export type LayoutPane = {
+  kind: PaneKind
+  pathMode: LayoutPathMode
+  /** absolute なら絶対パス、child なら基準からの相対名。それ以外では使わない。 */
+  path: string
+  pinned: boolean
+  sidebar?: SavedSidebarState
+  /** 検索ペインとして展開する時の初期検索語。 */
+  query: string
+}
+/** 名前を付けて呼び出せるペイン配置。並び順がそのまま Ctrl+1..9 の割り当てになる。 */
+export type Layout = { name: string; panes: LayoutPane[] }
+
+/**
+ * 移動種別の累計。
+ *
+ * 「俯瞰のような跳躍向けの装置に投資すべきか」は、跳躍（other）の割合と
+ * 出戻りの多さで決まる。1〜2週間ぶんを見たいので窓を閉じても消えない。
+ */
+export type NavTally = {
+  parent: number
+  child: number
+  descendant: number
+  sibling: number
+  other: number
+  quickReturns: number
+  /** 数え始めた時刻(ms)。0 なら未開始。何日ぶんの数字かが分からないと判断できない。 */
+  since: number
+}
+export const getNavTally = () => invoke<NavTally>('get_nav_tally')
+export const saveNavTally = (tally: NavTally) => invoke<void>('save_nav_tally', { tally })
+
+export const getLayouts = () => invoke<Layout[]>('get_layouts')
+export const saveLayouts = (layouts: Layout[]) => invoke<void>('save_layouts', { layouts })
 
 export type UndoState = { available: boolean; label: string }
 

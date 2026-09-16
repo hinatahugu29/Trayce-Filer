@@ -7,8 +7,11 @@
   import SearchPane from './SearchPane.svelte'
   import SettingsDialog from './SettingsDialog.svelte'
   import * as api from './api'
-  import { splitPath } from './api'
+  import { splitPath, pathHue } from './api'
   import { matchAction, resolveKey } from './shortcuts'
+  import LayoutPalette from './LayoutPalette.svelte'
+  import { applyLayout, captureLayout } from './layouts'
+  import * as navstats from './navstats'
 
   const win = getCurrentWindow()
   const label = win.label
@@ -23,6 +26,8 @@
     sidebar?: api.SavedSidebarState
     /** 転送先として固定し、場所を変えないペイン。 */
     pinned?: boolean
+    /** 場所ごとの作業状態。復元時に渡し、保存時はペインから引き直す。 */
+    pathStates?: api.SavedPathState[]
     ref?: Pane | SearchPane
   }
   /**
@@ -133,6 +138,18 @@
    * 使い回してしまい、表示がタブ切り替え前のまま固まる。
    */
   let nextPaneId = 1
+
+  /**
+   * 「無い」を表す固定値。
+   *
+   * props に `?? []` や `?? {}` を直接書くと、描画のたびに新しい実体が生まれる。
+   * 子側にその prop を見る `$:` があると毎回走り、親へ返って再描画 → また新しい実体、で
+   * 無限ループになる（症状は `RangeError: Invalid array length` で画面が固まるだけで、
+   * 原因を全く示さない）。同一性を安定させておけば、子の作りに関係なく踏まない。
+   */
+  const NO_PATH_STATES: api.SavedPathState[] = []
+  const DEFAULT_SIDEBAR: api.SavedSidebarState = { primary: 'tree' }
+
   let hoveredPaneId: number | null = null
   let hotkey = ''
   let dragIcon = ''
@@ -141,6 +158,98 @@
   /** アプリ設定。ペインより先に読み、全ペインへ配る。 */
   let settings: api.Settings | null = null
   let settingsOpen = false
+
+  // ---- 配置（ペインの並びの型） ----
+  //
+  // 多画面で毎日払っているのは移動コストではなく「前に作った並びを作り直すコスト」で、
+  // 元・先・参照・検索を並べるのに十数操作かかり、それが毎回霧散する。
+  // 名前を付けて型として持てば、別の場所にも同じ形を当て直せる。
+  let layouts: api.Layout[] = []
+  let layoutsOpen = false
+
+  function persistLayouts() {
+    api.saveLayouts(layouts).catch((e) => note(`配置の保存に失敗: ${e}`))
+  }
+
+  /** いまのタブの並びを、表に出ているペインの場所を基準にして覚える。 */
+  function saveLayout(name: string) {
+    const tab = activeTab
+    if (!tab) return
+    const anchor = activePanePath() ?? tab.panes[0]?.path ?? ''
+    if (!anchor) {
+      note('基準にする場所がまだ決まっていません')
+      return
+    }
+    const captured = captureLayout(
+      name,
+      tab.panes.map((pane) => ({
+        kind: pane.kind,
+        path: pane.ref?.currentPath() || pane.path,
+        pinned: pane.pinned,
+        sidebar: pane.sidebar,
+        query: pane.kind === 'search' ? pane.search?.query ?? '' : '',
+      })),
+      anchor
+    )
+    // 同名は置き換える。同じ名前が並ぶと Ctrl+数字 でどちらが出るか分からなくなる。
+    const at = layouts.findIndex((l) => l.name === name)
+    layouts = at >= 0 ? layouts.map((l, i) => (i === at ? captured : l)) : [...layouts, captured]
+    persistLayouts()
+    note(`配置「${name}」を保存しました`)
+  }
+
+  /**
+   * 配置をいまの場所に当てる。
+   *
+   * タブの中身を作り替えるので、現在のタブを置き換えるのではなく新しいタブにする…
+   * のではなく、あえて現在のタブを置き換える。配置は「この仕事の並び」であり、
+   * 呼ぶたびにタブが増えると、増えたタブを閉じる操作が新たなコストになる。
+   */
+  function useLayout(layout: api.Layout) {
+    const tab = activeTab
+    if (!tab) return
+    const anchor = activePanePath() ?? tab.panes[0]?.path ?? ''
+    if (!anchor) return
+    const snapshots = applyLayout(layout, anchor)
+    if (snapshots.length === 0) return
+
+    tab.panes = snapshots.map((snapshot) => ({
+      id: nextPaneId++,
+      kind: snapshot.kind,
+      path: snapshot.path,
+      pinned: snapshot.pinned ?? false,
+      sidebar: snapshot.sidebar,
+      search:
+        snapshot.kind === 'search'
+          ? { ...newSearchState(snapshot.path), query: snapshot.query ?? '' }
+          : undefined,
+    }))
+    tab.activeId = tab.panes[0].id
+    tabs = tabs
+    layoutsOpen = false
+    hoveredPaneId = null
+    note(`配置「${layout.name}」を ${splitPath(anchor).tail || anchor} に当てました`)
+    syncWindowContext()
+  }
+
+  function deleteLayout(index: number) {
+    const removed = layouts[index]
+    if (!removed) return
+    layouts = layouts.filter((_, i) => i !== index)
+    persistLayouts()
+    note(`配置「${removed.name}」を削除しました（フォルダーには触れていません）`)
+  }
+
+  /** 並び順がそのまま Ctrl+1..9 の割り当てなので、順番を変えられるようにする。 */
+  function moveLayout(index: number, delta: number) {
+    const to = index + delta
+    if (to < 0 || to >= layouts.length) return
+    const next = [...layouts]
+    const [moved] = next.splice(index, 1)
+    next.splice(to, 0, moved)
+    layouts = next
+    persistLayouts()
+  }
 
   function newSearchState(path: string): api.SavedSearchState {
     return {
@@ -196,7 +305,26 @@
       is_active: candidate.id === activeTabId,
     }))
     api.setWindowContext(label, tabLabel(tab), tabs.length, panes, windowTabs).catch(() => {})
+
+    // 窓自身にも現在地を持たせる。
+    //
+    // 多画面で毎分起きる「どの窓だっけ」は、ワークベンチを召喚するより
+    // Alt+Tab とタスクバーで解決できたほうが速い。そこに出るのはタイトルだけなので、
+    // 窓の識別はまずここから始める。
+    const active = tab.panes.find((pane) => pane.id === tab.activeId) ?? tab.panes[0]
+    const here = active?.ref?.currentPath() || active?.path || ''
+    windowHue = here ? pathHue(here) : null
+    const name = here ? splitPath(here).tail || here : ''
+    win.setTitle(name ? `${name} — Trayce` : 'Trayce').catch(() => {})
   }
+
+  /**
+   * 現在地から決まる窓の色。
+   *
+   * 同じ場所は常に同じ色になるので、窓が重なっていても色帯だけで
+   * 「あのプロジェクトの窓だ」と当たりが付く。
+   */
+  let windowHue: number | null = null
 
   function newTab(path: string) {
     const paneId = nextPaneId++
@@ -424,7 +552,22 @@
     if (el && (el.tagName === 'INPUT' || el.isContentEditable)) return
     if (!settings) return
 
+    // Ctrl+1..9 は保存済み配置の n 番目。番号は一覧の並び順から決まる位置指定なので、
+    // アクションとして1つずつ割り当てるのではなくここで直接扱う。
+    if (ev.ctrlKey && !ev.altKey && !ev.shiftKey && /^[1-9]$/.test(ev.key)) {
+      const picked = layouts[Number(ev.key) - 1]
+      if (picked) {
+        ev.preventDefault()
+        useLayout(picked)
+        return
+      }
+    }
+
     switch (matchAction(ev, settings.shortcuts)) {
+      case 'layouts':
+        ev.preventDefault()
+        layoutsOpen = !layoutsOpen
+        break
       case 'newTab':
         ev.preventDefault()
         newTab(activePanePath() ?? tabs[0]?.panes[0]?.path ?? '')
@@ -481,6 +624,9 @@
         pinned: p.pinned || undefined,
         search: p.search,
         sidebar: p.sidebar,
+        // 通常ペインだけが場所ごとの状態を持つ。取れない時は復元時の値を落とさず残す。
+        pathStates:
+          p.ref && 'capturePathStates' in p.ref ? p.ref.capturePathStates() : p.pathStates,
       }))
       stashActiveTray(t)
       return {
@@ -506,6 +652,9 @@
     settings = await api.getSettings()
     dragIcon = await api.dragPreviewIcon()
     hotkey = await api.overlayHotkey()
+    layouts = await api.getLayouts().catch(() => [])
+    // 移動の集計は窓を閉じても続きから数える。1〜2週間ぶんを見て判断するため。
+    await navstats.load()
 
     // open_window で開かれた窓は、指定されたパスがレジストリに入っている。
     const initialWindowPath = await api.windowInitialPath(label)
@@ -522,6 +671,7 @@
             pinned: p.pinned ?? false,
             search: p.search,
             sidebar: p.sidebar,
+            pathStates: p.pathStates,
           }))
           if (panes.length === 0) {
             panes.push({ id: nextPaneId++, kind: 'directory', path: await api.homeDir() })
@@ -603,6 +753,11 @@
 <svelte:window on:keydown={onWindowKey} />
 
 <main class:hovering>
+  <!-- 現在地の色帯。窓を並べた時の見分けに使う。 -->
+  <div
+    class="window-hue"
+    style:background={windowHue === null ? 'transparent' : `hsl(${windowHue} 55% 45%)`}
+  />
   {#if tabs.length > 1}
     <div class="tabbar" role="tablist">
       {#each tabs as tab, idx (tab.id)}
@@ -685,6 +840,7 @@
               initialPath={pane.path}
               {settings}
               onOpenSettings={() => (settingsOpen = true)}
+              onOpenLayouts={() => (layoutsOpen = true)}
               {dragIcon}
               active={pane.id === activeTab.activeId}
               keyboardTarget={pane.id === (hoveredPaneId ?? activeTab.activeId)}
@@ -700,7 +856,8 @@
               onTrayAdd={addTray}
               onTrayRename={renameTray}
               onTrayDelete={deleteTray}
-              sidebarState={pane.sidebar ?? { primary: 'tree' }}
+              savedPathStates={pane.pathStates ?? NO_PATH_STATES}
+              sidebarState={pane.sidebar ?? DEFAULT_SIDEBAR}
               onSidebarChange={(sidebar) => {
                 pane.sidebar = sidebar
                 tabs = tabs
@@ -723,7 +880,14 @@
               }}
               onNote={note}
               onSplit={(path) => splitPane(pane.id, path)}
-              onSplitSearch={(path) => splitPane(pane.id, path, 'search')}
+              onSplitSearch={(path, query) =>
+                splitPane(
+                  pane.id,
+                  path,
+                  'search',
+                  // 絞り込みからの昇格。語をそのまま持ち込み、打ち直させない。
+                  query ? { ...newSearchState(path), query } : undefined
+                )}
               onClose={() => closePane(pane.id)}
               onDetach={(path) => detachPane(pane.id, path)}
               onKindChange={(kind) => changePaneKind(pane.id, kind)}
@@ -765,6 +929,17 @@
 </main>
 
 <!-- 設定は窓に1つ。ペインごとに持つと同じものが複数開きうる。 -->
+<LayoutPalette
+  open={layoutsOpen}
+  {layouts}
+  anchor={activePanePath() ?? activeTab?.panes[0]?.path ?? ''}
+  onClose={() => (layoutsOpen = false)}
+  onApply={useLayout}
+  onSave={saveLayout}
+  onDelete={deleteLayout}
+  onMove={moveLayout}
+/>
+
 <SettingsDialog
   open={settingsOpen}
   onClose={() => (settingsOpen = false)}
@@ -786,6 +961,13 @@
   /* 落とせる状態が分かるように枠を光らせる。 */
   main.hovering {
     border-color: #4c9aff;
+  }
+
+  /* 現在地ごとに色が決まる細い帯。太くすると情報ではなく装飾になるので 2px に留める。 */
+  .window-hue {
+    flex: none;
+    height: 2px;
+    transition: background 120ms linear;
   }
 
   .tabbar {
