@@ -576,6 +576,23 @@
     return tab.panes.find((p) => p.id === tab.activeId) ?? tab.panes[0]
   }
 
+  /**
+   * ★欄へ落とされたものを登録する。場所もファイルも受ける。
+   *
+   * 何も言わずに捨てると、届かなかったのか無視されたのか分からないので、
+   * 登録した件数と、すでに入っていた件数をそれぞれ知らせる。
+   */
+  async function acceptFavoriteDrop(paths: string[]) {
+    if (paths.length === 0) return
+    const added = await api.addFavorites(paths)
+    if (added > 0) api.favoritesChanged()
+
+    const said: string[] = []
+    if (added > 0) said.push(`${added}件を★へ登録`)
+    if (paths.length > added) said.push(`${paths.length - added}件はすでに登録済み`)
+    note(said.join(' / '))
+  }
+
   function onWindowKey(ev: KeyboardEvent) {
     const el = ev.target as HTMLElement | null
     if (el && (el.tagName === 'INPUT' || el.isContentEditable)) return
@@ -738,8 +755,17 @@
 
       // 物理座標で来るので、CSS ピクセルへ直してから当たり判定する。
       const dpr = window.devicePixelRatio || 1
-      const target = paneAt(event.payload.position.x / dpr, event.payload.position.y / dpr)
-      await target?.ref?.acceptDrop(event.payload.paths)
+      const x = event.payload.position.x / dpr
+      const y = event.payload.position.y / dpr
+
+      // paneAt は当たらなければアクティブペインへ落ちる（＝サイドバーへ落としても
+      // ペインのフォルダへコピーされる）ので、より内側の★欄を先に見る。
+      // 順を逆にすると、お気に入りへは永久に届かない。
+      if (document.elementFromPoint(x, y)?.closest('[data-drop-favorites]')) {
+        await acceptFavoriteDrop(event.payload.paths)
+        return
+      }
+      await paneAt(x, y)?.ref?.acceptDrop(event.payload.paths)
     })
 
     unlistenFocus = await win.onFocusChanged(({ payload }) => {

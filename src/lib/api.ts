@@ -97,9 +97,31 @@ export type HistoryEntry = { path: string; at: number }
 export const listFavorites = () => invoke<string[]>('list_favorites')
 /** 登録済みなら解除、未登録なら登録。戻り値は操作後に登録されているか。 */
 export const toggleFavorite = (path: string) => invoke<boolean>('toggle_favorite_cmd', { path })
+/**
+ * 落とされたパスを末尾へ足す。既に入っているものは飛ばし、足した件数を返す。
+ *
+ * `toggleFavorite` は在籍を反転するので、ドロップからは呼べない。既に登録済みの
+ * ものを落とすと解除になり、足すつもりの操作で消えることになる。
+ */
+export const addFavorites = (paths: string[]) => invoke<number>('add_favorites_cmd', { paths })
 export const removeFavorite = (path: string) => invoke<void>('remove_favorite', { path })
 export const reorderFavorite = (from: number, to: number) =>
   invoke<void>('reorder_favorite', { from, to })
+
+/**
+ * お気に入りが変わったことを、開いている★欄すべてへ知らせる。
+ *
+ * お気に入りは全ペイン共有だが、表示は Sidebar が各ペインで自前に持つ。
+ * 登録した側だけが取り直すと、他のペインと上下分割の下段が古いまま残る。
+ */
+const favoriteListeners = new Set<() => void>()
+export function onFavoritesChanged(listener: () => void): () => void {
+  favoriteListeners.add(listener)
+  return () => favoriteListeners.delete(listener)
+}
+export function favoritesChanged(): void {
+  favoriteListeners.forEach((listener) => listener())
+}
 
 export const listHistory = () => invoke<HistoryEntry[]>('list_history')
 export const recordHistory = (path: string) => invoke<void>('record_history', { path })

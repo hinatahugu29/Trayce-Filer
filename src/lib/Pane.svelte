@@ -293,7 +293,14 @@
    */
   const SLOW_LOAD_MS = 120
 
-  export async function open(path: string) {
+  /**
+   * この場所を開く。
+   *
+   * `counted: false` は移動の集計から外す。★に入れたファイルの「含まれる場所へ」の
+   * ように、この機能を足したこと自体が生んだ跳躍を数えると、`other` の割合で
+   * 俯瞰画面の要否を決める計測（Settings → 移動の集計）が自分の足で歪む。
+   */
+  export async function open(path: string, { counted = true }: { counted?: boolean } = {}) {
     // パスバー・一覧・ツリー・履歴・Q キーはすべてここを通るので、固定の判定はここだけでよい。
     // 表示前（起動直後）は固定していても最初の場所を開く。
     if (pinned && listing && api.pathIdentity(path) !== api.pathIdentity(listing.path)) {
@@ -329,7 +336,7 @@
       // 記録は移動が成立してから。読めずに終わった場所を「行った」と数えない。
       rememberBranch(previous, listing.path)
       // どの種別の移動が多いかを数える。どこへ投資すべきかを推測ではなく実データで決めるため。
-      navstats.track(previous, listing.path, before, leftAt)
+      if (counted) navstats.track(previous, listing.path, before, leftAt)
 
       forwardTo = forwardMemory.get(api.pathIdentity(listing.path)) ?? null
       previousPath = previous
@@ -777,15 +784,23 @@
     }
   }
 
+  /** 集計に数えない移動。★のファイル行から、含まれる場所を開く時に使う。 */
+  function goToUncounted(path: string) {
+    open(path, { counted: false })
+  }
+
   async function syncFavoriteState() {
     const favorites = await api.listFavorites()
-    isFavorite = !!listing && favorites.includes(listing.path)
+    // 大文字小文字や末尾の区切りが違うだけで ☆ が消えないよう、Rust 側と同じ同一性で見る。
+    const here = listing ? api.pathIdentity(listing.path) : null
+    isFavorite = here !== null && favorites.some((path) => api.pathIdentity(path) === here)
   }
 
   async function toggleFavorite() {
     if (!listing) return
     isFavorite = await api.toggleFavorite(listing.path)
-    sidebar?.refresh()
+    // 上段の Sidebar しか bind していないので、自前で呼ぶと下段が古いまま残る。
+    api.favoritesChanged()
   }
 
   /** 落とされたファイルをこのペインの場所へ取り込む。 */
@@ -1116,8 +1131,15 @@
   const FS_RELOAD_DEBOUNCE = 250
   const FS_RELOAD_MAX_WAIT = 1000
 
+  let unlistenFavorites: (() => void) | null = null
+
   onMount(async () => {
     await open(initialPath)
+
+    // 別のペインへ★を落とされた時にも、ここの ☆ が追従するようにする。
+    unlistenFavorites = api.onFavoritesChanged(() => {
+      syncFavoriteState()
+    })
 
     // 転送イベントは窓全体に飛ぶので、自分が始めたものだけ拾う。
     // 開始の応答（ID）より先に届いた分は、ID が分かるまで預かっておく。
@@ -1156,6 +1178,7 @@
     unlistenFs?.()
     unlistenProgress?.()
     unlistenDone?.()
+    unlistenFavorites?.()
     if (reloadTimer !== null) clearTimeout(reloadTimer)
     // 見張りを残したままペインを閉じると、監視が積み上がっていく。
     if (watched) api.unwatchDir(watched).catch(() => {})
@@ -1302,6 +1325,7 @@
           onTabChange={sidebarChanged}
           currentPath={listing?.path ?? ''}
           onNavigate={open}
+          onNavigateUncounted={goToUncounted}
           showHidden={sort.showHidden}
           {trayItems}
           onTrayRemove={onTrayToggle}
@@ -1326,6 +1350,7 @@
               onTabChange={sidebarChanged}
               currentPath={listing?.path ?? ''}
               onNavigate={open}
+              onNavigateUncounted={goToUncounted}
               showHidden={sort.showHidden}
               {trayItems}
               onTrayRemove={onTrayToggle}
