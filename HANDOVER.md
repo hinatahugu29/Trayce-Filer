@@ -313,6 +313,8 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 
   A jump from a file favourite is deliberately **not** counted. `open` grew a `counted` option for it. The measurement window decides whether to build an overview surface from the share of `other` moves; a new jump path introduced by this very feature would push that share up and argue for building something the feature has just made unnecessary.
 
+  Caught in the running app: pressing `→` opened the file as well as going to its folder. The row decides its verb on **pointerup**, not click, because that shares the flow with drag-to-reorder — so a button stopping `click` is not enough, and `✕` had been quietly carrying the same defect (removing a folder favourite navigated to it on the way out). Stopping `pointerup` on the buttons would trade it for a worse one: release a dragged row over a button and the row's handler never runs, leaving the grab unresolved. The row now checks where the release landed instead.
+
   Also fixed while passing through: `bind:this={sidebar}` only ever bound the **upper** Sidebar, so `F` left the lower panel of a split sidebar stale. Favourite changes now go through one notifier in `api.ts` that every ★ panel and every path-bar ☆ subscribes to, which covers the new drop path and that old gap at once.
 
 ## Commit log

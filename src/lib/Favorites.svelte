@@ -39,7 +39,17 @@
     if (el) dropIndex = Number((el as HTMLElement).dataset.favIndex)
   }
 
-  async function onPointerUp(index: number) {
+  /**
+   * 行の起動判定。
+   *
+   * 行の動詞は click ではなく pointerup で決める（掴んでの並べ替えと同じ流れで
+   * 扱うため）。つまり行の中のボタンが click を止めても行の動詞は素通りするので、
+   * ここで「どこで離したか」を見て弾く必要がある。
+   *
+   * ボタン側で pointerup を止める手もあるが、それだと行を掴んでボタンの上で
+   * 離した時にこの関数自体が走らず、掴んだ状態が解けないまま残る。
+   */
+  async function onPointerUp(index: number, ev: PointerEvent) {
     const from = dragIndex
     const to = dropIndex
     grab = null
@@ -47,6 +57,8 @@
     dropIndex = null
 
     if (from === null || to === null) {
+      // 行の中のボタン（→・✕）の上で離したなら、そのボタンの仕事だけをさせる。
+      if ((ev.target as HTMLElement | null)?.closest('button')) return
       // 動かしていないなら、ただのクリックとして扱う。
       activate(items[index], index)
       return
@@ -110,7 +122,7 @@
       role="button"
       tabindex="-1"
       on:pointerdown={(e) => onPointerDown(i, e)}
-      on:pointerup={() => onPointerUp(i)}
+      on:pointerup={(e) => onPointerUp(i, e)}
       on:keydown={(e) => e.key === 'Enter' && activate(path, i)}
     >
       <PathRow
