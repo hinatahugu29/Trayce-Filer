@@ -707,7 +707,7 @@
                 <span class="twist-space" />
               {/if}
               <span class="icon">{fileIcon(entry.name, entry.is_dir)}</span>
-              <span class="name-stack"><span class="name">{entry.name}</span>{#if secondaryLabel(entry)}<small>{secondaryLabel(entry)}</small>{/if}</span>
+              <span class="name-stack" class:stacked={!!secondaryLabel(entry)}><span class="name">{entry.name}</span>{#if secondaryLabel(entry)}<small>{secondaryLabel(entry)}</small>{/if}</span>
               {#if trayKeys.has(pathIdentity(row.path))}<span class="tray-mark" title="トレイに登録済み">◈</span>{/if}
             </span>
             <span class="col c-ext">{entry.is_dir ? '' : entry.ext}</span>
@@ -799,7 +799,13 @@
   .row.in-tray { box-shadow: inset 3px 0 #58c6a5; }
   .row.in-tray:not(.selected) { background: #20332f; }
   .tray-mark { margin-left: auto; padding-right: 5px; color: #66d1ae; font-size: 10px; }
-  .name-stack { display: flex; min-width: 0; flex: 1; flex-direction: column; line-height: 10px; }
+  /* 行送りは文字より小さくしない。overflow: hidden と組み合わさると、
+     はみ出した上下が切り落とされる。日本語は仮名の濁点や「ー」が上下いっぱいに
+     伸びるので、英数字では気付けない欠け方をする。 */
+  .name-stack { display: flex; min-width: 0; flex: 1; flex-direction: column; line-height: 1.3; }
+  /* 2行になる時だけ詰める。24px の行に 12.5px と 8px を収めるため。 */
+  .name-stack.stacked { line-height: 1.15; }
+  .name-stack.stacked small { line-height: 1; }
   .name-stack .name, .name-stack small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .name-stack small { color: #6f7880; font-size: 8px; }
   /* キーボードの位置。選択とは別に示さないと、Shift 選択中に迷子になる。 */
