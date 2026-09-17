@@ -1,11 +1,14 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import { armMiddleClick, onMiddleClick } from './middleclick'
   import * as api from './api'
   import { splitPath, pathHue } from './api'
 
   export let path: string
   /** 上位階層やアドレスバーからの移動先。 */
   export let onNavigate: (path: string) => void = () => {}
+  /** 中クリック用。いまのペインを動かさず、その場所を隣のペインで開く。 */
+  export let onOpenBeside: (path: string) => void = () => {}
   export let showHidden = false
 
   $: ({ lead, tail } = splitPath(path))
@@ -169,7 +172,12 @@
       <nav class="lead">
         {#each crumbs as crumb, i}
           <span class="crumb">
-            <button type="button" on:click={() => onNavigate(crumb.path)}>{crumb.label}</button>
+            <button
+              type="button"
+              on:click={() => onNavigate(crumb.path)}
+              on:mousedown={armMiddleClick}
+              on:auxclick={onMiddleClick(() => onOpenBeside(crumb.path))}
+            >{crumb.label}</button>
             <button
               type="button"
               class="drop"
@@ -201,6 +209,11 @@
                           closeSiblings()
                           onNavigate(sibling.path)
                         }}
+                        on:mousedown={armMiddleClick}
+                        on:auxclick={onMiddleClick(() => {
+                          closeSiblings()
+                          onOpenBeside(sibling.path)
+                        })}
                       >
                         {sibling.name}
                       </button>

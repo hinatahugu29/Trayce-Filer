@@ -1,11 +1,14 @@
 <script lang="ts">
   import PathRow from './PathRow.svelte'
+  import { armMiddleClick, onMiddleClick } from './middleclick'
   import * as api from './api'
   import { relativeTime } from './api'
   import type { HistoryEntry } from './api'
 
   export let currentPath: string
   export let onNavigate: (path: string) => void
+  /** 中クリック用。いまのペインを動かさず、その場所を隣のペインで開く。 */
+  export let onOpenBeside: (path: string) => void = () => {}
   export let onChanged: () => void = () => {}
 
   export let items: HistoryEntry[] = []
@@ -42,6 +45,8 @@
         tabindex="-1"
         on:click={() => onNavigate(entry.path)}
         on:keydown={(e) => e.key === 'Enter' && onNavigate(entry.path)}
+        on:mousedown={armMiddleClick}
+        on:auxclick={onMiddleClick(() => onOpenBeside(entry.path))}
       >
         <PathRow
           path={entry.path}

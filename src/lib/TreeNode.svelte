@@ -4,6 +4,7 @@
   import { joinPath } from './api'
   import type { Entry } from './api'
   import Self from './TreeNode.svelte'
+  import { armMiddleClick, onMiddleClick } from './middleclick'
 
   export let path: string
   export let name: string
@@ -13,6 +14,8 @@
   /** 自動展開すべき祖先パスの集合。 */
   export let autoOpen: Set<string>
   export let onNavigate: (path: string) => void
+  /** 中クリック用。いまのペインを動かさず、その場所を隣のペインで開く。 */
+  export let onOpenBeside: (path: string) => void = () => {}
   /** 一覧と揃える。ツリーだけ隠しフォルダが見えると混乱する。 */
   export let showHidden = false
 
@@ -106,6 +109,8 @@
     tabindex="-1"
     on:click={activate}
     on:keydown={(e) => e.key === 'Enter' && activate()}
+    on:mousedown={armMiddleClick}
+    on:auxclick={onMiddleClick(() => onOpenBeside(path))}
   >
     <button
       class="twisty"
@@ -129,6 +134,7 @@
         {currentPath}
         {autoOpen}
         {onNavigate}
+        {onOpenBeside}
         {showHidden}
       />
     {/each}

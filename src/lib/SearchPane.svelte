@@ -694,6 +694,7 @@
               resolvePath={resultPath}
               secondaryLabel={resultParent}
               onOpen={onOpenDirectory}
+              onOpenBeside={onSplit}
               onLaunch={launch}
               onSort={sortResults}
               onSelectionChange={(paths) => (selection = paths)}
