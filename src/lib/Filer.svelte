@@ -594,9 +594,19 @@
   }
 
   function onWindowKey(ev: KeyboardEvent) {
+    if (!settings) return
+
+    // 窓の切替だけは入力欄のガードより手前に置く。Alt 修飾は文字を生まないので
+    // 絞り込み欄や検索語欄の入力を奪わないし、探している最中こそ隣の窓を
+    // 見たくなる。preventDefault は Alt を離した時のシステムメニュー音も止める。
+    if (matchAction(ev, settings.shortcuts) === 'swapWindow') {
+      ev.preventDefault()
+      api.swapToRecentWindow(label)
+      return
+    }
+
     const el = ev.target as HTMLElement | null
     if (el && (el.tagName === 'INPUT' || el.isContentEditable)) return
-    if (!settings) return
 
     // Ctrl+1..9 は保存済み配置の n 番目。番号は一覧の並び順から決まる位置指定なので、
     // アクションとして1つずつ割り当てるのではなくここで直接扱う。
@@ -770,6 +780,10 @@
 
     unlistenFocus = await win.onFocusChanged(({ payload }) => {
       if (payload) api.touchWindow(label)
+      // フォーカスが外れた時、ポインターはこの窓の上に置き去りになる。
+      // 覚えたままにすると、キーで窓を移った先で押した単独キーが、
+      // 利用者の見ていないこちらのペインに効いてしまう。
+      else hoveredPaneId = null
     })
 
     unlistenTray = await listen<api.WindowTrayChanged>(api.WINDOW_TRAY_CHANGED, (ev) => {

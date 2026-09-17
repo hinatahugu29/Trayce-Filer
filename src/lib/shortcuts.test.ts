@@ -64,6 +64,13 @@ describe('matchAction', () => {
     expect(matchAction(ev({ key: 'd', altKey: true }), {})).toBe('addressAlt')
   })
 
+  // 素の Q はペイン、Alt+Q は窓。同じ指で層だけが変わるのが狙いなので、
+  // 片方がもう片方を飲み込んでいないことを押さえておく。
+  it('Alt の有無でペインと窓を撃ち分ける', () => {
+    expect(matchAction(ev({ key: 'q' }), {})).toBe('hoverParent')
+    expect(matchAction(ev({ key: 'q', altKey: true }), {})).toBe('swapWindow')
+  })
+
   it('設定で割り当てを変えたら新しい方で当たる', () => {
     const custom = { undo: 'Ctrl+U' }
     expect(matchAction(ev({ key: 'u', ctrlKey: true }), custom)).toBe('undo')

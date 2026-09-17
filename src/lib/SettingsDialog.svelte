@@ -123,7 +123,9 @@
     return new Set([...seen.entries()].filter(([, n]) => n > 1).map(([k]) => k))
   })()
 
-  const groups = ['移動', '編集', 'タブ', '左手操作', 'その他'] as const
+  // ACTIONS にある group はすべて並べる。ここから漏れた group の項目は
+  // 設定画面に現れず、既定キーしか使えないまま気付けない（配置がそうだった）。
+  const groups = ['移動', '編集', 'タブ', 'ウィンドウ', '配置', '左手操作', 'その他'] as const
   const sortKeys: { value: SortKey; label: string }[] = [
     { value: 'name', label: '名前' },
     { value: 'ext', label: '種類' },

@@ -45,6 +45,7 @@ export type ActionId =
   | 'trayToggle'
   | 'toggleHidden'
   | 'layouts'
+  | 'swapWindow'
 
 export type ActionDef = {
   id: ActionId
@@ -52,7 +53,7 @@ export type ActionDef = {
   /** 組み込みの既定キー。設定で上書きできる。 */
   fallback: string
   /** 設定画面での並び分け。 */
-  group: '移動' | '編集' | 'タブ' | '配置' | '左手操作' | 'その他'
+  group: '移動' | '編集' | 'タブ' | 'ウィンドウ' | '配置' | '左手操作' | 'その他'
 }
 
 export const ACTIONS: ActionDef[] = [
@@ -78,6 +79,11 @@ export const ACTIONS: ActionDef[] = [
   { id: 'restoreClosedTab', label: '閉じたタブを開き直す', fallback: 'Ctrl+Shift+T', group: 'タブ' },
   { id: 'nextTab', label: '次のタブ', fallback: 'Ctrl+Tab', group: 'タブ' },
   { id: 'prevTab', label: '前のタブ', fallback: 'Ctrl+Shift+Tab', group: 'タブ' },
+
+  // 素の Q/W はペインに効く。Alt を足すと同じ指のまま一段外側の「窓」に効く、
+  // という規則にしてある。窓の層に破壊的な操作は置かない（切替キーの隣で
+  // 指が滑ると、ペイン1枚ではなく窓ごと失うことになるため）。
+  { id: 'swapWindow', label: '直前のウィンドウへ', fallback: 'Alt+Q', group: 'ウィンドウ' },
 
   { id: 'hoverParent', label: 'ポインター先で親へ', fallback: 'Q', group: '左手操作' },
   { id: 'hoverClosePane', label: 'ポインター先のペインを閉じる', fallback: 'W', group: '左手操作' },

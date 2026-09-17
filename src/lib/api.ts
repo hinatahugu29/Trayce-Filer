@@ -520,6 +520,9 @@ export const overlayHotkey = () =>
 export const openWindow = (path: string) => invoke<string>('open_window', { path })
 export const listWindows = () => invoke<WindowInfo[]>('list_windows')
 export const focusWindow = (label: string) => invoke<void>('focus_window', { label })
+/** 直前まで使っていた窓と入れ替わる。`from` は今この窓のラベル。 */
+export const swapToRecentWindow = (from: string) =>
+  invoke<void>('swap_to_recent_window', { from })
 export const focusPane = (label: string, paneId: number) =>
   invoke<void>('focus_pane', { label, paneId })
 export const focusTab = (label: string, tabId: number) =>
