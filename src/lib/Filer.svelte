@@ -594,9 +594,25 @@
   }
 
   function onWindowKey(ev: KeyboardEvent) {
+    if (!settings) return
+
+    // 窓の切替だけは入力欄のガードより手前に置く。Alt 修飾は文字を生まないので
+    // 絞り込み欄や検索語欄の入力を奪わないし、探している最中こそ隣の窓を
+    // 見たくなる。preventDefault は Alt を離した時のシステムメニュー音も止める。
+    const windowAction = matchAction(ev, settings.shortcuts)
+    if (windowAction === 'swapWindow') {
+      ev.preventDefault()
+      api.swapToRecentWindow(label)
+      return
+    }
+    if (windowAction === 'cycleWindow' || windowAction === 'cycleWindowBack') {
+      ev.preventDefault()
+      api.cycleWindow(label, windowAction === 'cycleWindow' ? 1 : -1)
+      return
+    }
+
     const el = ev.target as HTMLElement | null
     if (el && (el.tagName === 'INPUT' || el.isContentEditable)) return
-    if (!settings) return
 
     // Ctrl+1..9 は保存済み配置の n 番目。番号は一覧の並び順から決まる位置指定なので、
     // アクションとして1つずつ割り当てるのではなくここで直接扱う。
@@ -644,6 +660,31 @@
   let unlistenTray: UnlistenFn | null = null
   let unlistenActivatePane: UnlistenFn | null = null
   let unlistenActivateTab: UnlistenFn | null = null
+  let unlistenSwapArrived: UnlistenFn | null = null
+
+  /** キーで移ってきた直後だけ立つ。枠を一瞬光らせるのに使う。 */
+  let swapArrived = false
+  let swapArrivedTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * 「ここへ来た」を枠で伝える。
+   *
+   * 窓が重なっていると、前面化しただけでは切り替わったことが見えない。
+   * Trayce の窓どうしは見た目がよく似ているので、パスを読むまで
+   * どちらに居るのか分からない時間が生まれる。
+   */
+  function flashArrival(arrival: api.SwapArrival) {
+    // 巡回の時だけ何番目かを言う。往復は2枚を行き来するだけなので、
+    // 番号を出しても「1/2 と 2/2 が交互に出る」以上の意味を持たない。
+    if (arrival) note(`${arrival.position}/${arrival.total} 番目のウィンドウ`)
+
+    if (swapArrivedTimer) clearTimeout(swapArrivedTimer)
+    swapArrived = true
+    swapArrivedTimer = setTimeout(() => {
+      swapArrived = false
+      swapArrivedTimer = null
+    }, 260)
+  }
 
   /** 起動に失敗した理由。ここが埋まる時は画面が空のままになるので必ず見せる。 */
   let bootError: string | null = null
@@ -770,6 +811,10 @@
 
     unlistenFocus = await win.onFocusChanged(({ payload }) => {
       if (payload) api.touchWindow(label)
+      // フォーカスが外れた時、ポインターはこの窓の上に置き去りになる。
+      // 覚えたままにすると、キーで窓を移った先で押した単独キーが、
+      // 利用者の見ていないこちらのペインに効いてしまう。
+      else hoveredPaneId = null
     })
 
     unlistenTray = await listen<api.WindowTrayChanged>(api.WINDOW_TRAY_CHANGED, (ev) => {
@@ -794,6 +839,9 @@
       hoveredPaneId = null
       tabs = tabs
     })
+    unlistenSwapArrived = await listen<api.SwapArrival>(api.WINDOW_SWAP_ARRIVED, ({ payload }) =>
+      flashArrival(payload)
+    )
   }
 
   onDestroy(() => {
@@ -802,12 +850,18 @@
     unlistenTray?.()
     unlistenActivatePane?.()
     unlistenActivateTab?.()
+    unlistenSwapArrived?.()
+    if (swapArrivedTimer) clearTimeout(swapArrivedTimer)
   })
 </script>
 
 <svelte:window on:keydown={onWindowKey} />
 
-<main class:hovering>
+<main
+  class:hovering
+  class:arrived={swapArrived}
+  style:--arrive-color={windowHue === null ? '#63cfad' : `hsl(${windowHue} 60% 55%)`}
+>
   <!-- 現在地の色帯。窓を並べた時の見分けに使う。 -->
   <div
     class="window-hue"
@@ -1022,10 +1076,24 @@
     height: 100vh;
     box-sizing: border-box;
     border: 2px solid transparent;
+    transition: border-color 200ms ease-out;
   }
-  /* 落とせる状態が分かるように枠を光らせる。 */
+  /* キーで移ってきた窓の縁を一瞬光らせる。色はその窓の色帯と同じものを使う。
+     現在地ごとに決まる色なので、光った色自体が「どの窓へ来たか」を含む。 */
+  main.arrived {
+    border-color: var(--arrive-color);
+    transition: border-color 60ms ease-in;
+  }
+  /* 落とせる状態が分かるように枠を光らせる。到着の点滅より優先する
+     （落とす直前に色が変わると、落とし先を見失う）。 */
   main.hovering {
     border-color: #4c9aff;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    main {
+      transition: none;
+    }
   }
 
   /* 現在地ごとに色が決まる細い帯。太くすると情報ではなく装飾になるので 2px に留める。 */

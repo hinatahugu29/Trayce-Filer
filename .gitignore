@@ -19,3 +19,6 @@ Thumbs.db
 
 # Claude Code の端末固有設定（許可リストなど）
 .claude/settings.local.json
+
+# sed -i が Git Bash で残す中間ファイル。取りこぼすと歴史に混ざる。
+*.tmp.*

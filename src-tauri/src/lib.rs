@@ -186,6 +186,8 @@ pub fn run() {
       windows::open_window,
       windows::list_windows,
       windows::focus_window,
+      windows::swap_to_recent_window,
+      windows::cycle_window,
       windows::focus_pane,
       windows::focus_tab,
       windows::set_window_path,
