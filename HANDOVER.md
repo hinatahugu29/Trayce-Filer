@@ -423,7 +423,7 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 - `5c66281` — `fix: tell the truth when a search is stopped, and match the pane keys`
 - `ce460ba` — `feat: register favourite folders by dropping them`
 - `b1b2c6e` — `feat: keep files in favourites as a light launcher`
-- `d6eb902` — `fix: launch a file once when Enter is pressed on a clicked row`
+- `713138b` — `fix: launch a file once when Enter is pressed on a clicked row`
 - `cc1b18f` — `feat: let a window hand focus back to the one before it`
 - `62042fc` — `feat: put the window swap under Alt+Q`
 - `3f20dbe` — `feat: flash the edge of the window you land in`
