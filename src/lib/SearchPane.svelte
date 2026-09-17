@@ -125,10 +125,15 @@
   }
 
   async function refreshLocationHistory() {
-    ;[locationHistory, favoriteLocations] = await Promise.all([
+    const [locations, favorites] = await Promise.all([
       api.listSearchLocations(),
       api.listFavorites(),
     ])
+    locationHistory = locations
+    // ★はファイルも持つが、検索のルートになれるのは場所だけ。
+    // 押しても走査が始まらない行を並べても、選べる場所を探しにくくするだけ。
+    const kinds = await api.pathKinds(favorites)
+    favoriteLocations = favorites.filter((_, i) => kinds[i]?.isDir)
   }
 
   function locationLabel(paths: string[]): string {
@@ -158,7 +163,9 @@
       return
     }
     await api.toggleFavorite(scopes[0])
-    favoriteLocations = await api.listFavorites()
+    // 素で listFavorites を入れるとファイルまで候補に並ぶ。絞り込みは一箇所に持つ。
+    await refreshLocationHistory()
+    api.favoritesChanged()
   }
 
   function nextRequestId(): string {

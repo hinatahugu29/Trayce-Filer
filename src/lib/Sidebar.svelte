@@ -9,6 +9,8 @@
 
   export let currentPath: string
   export let onNavigate: (path: string) => void
+  /** 移動の集計に数えない移動。既定では普通の移動と同じ。 */
+  export let onNavigateUncounted: (path: string) => void = (path) => onNavigate(path)
   /** 一覧の設定をツリーにも反映させる。 */
   export let showHidden = false
   export let trayItems: string[] = []
@@ -37,7 +39,7 @@
   }
 
   let favorites: string[] = []
-  let favoritesExist: boolean[] = []
+  let favoriteKinds: api.PathKind[] = []
   let history: HistoryEntry[] = []
   let historyExist: boolean[] = []
 
@@ -50,12 +52,13 @@
   export async function refresh() {
     favorites = await api.listFavorites()
     history = await api.listHistory()
-    const [favoriteKinds, historyKinds] = await Promise.all([
+    const [favoriteKindList, historyKinds] = await Promise.all([
       api.pathKinds(favorites),
       api.pathKinds(history.map((h) => h.path)),
     ])
-    // ここは場所だけを並べる欄なので、ファイルに置き換わっていたら「無い」と同じに扱う。
-    favoritesExist = favoriteKinds.map((kind) => kind.isDir)
+    // ★はファイルも持てるので、種別をそのまま渡して行の動詞を出し分けさせる。
+    favoriteKinds = favoriteKindList
+    // 履歴は場所だけを並べる欄なので、ファイルに置き換わっていたら「無い」と同じに扱う。
     historyExist = historyKinds.map((kind) => kind.isDir)
   }
 
@@ -122,9 +125,10 @@
     {:else if tab === 'favorites'}
       <Favorites
         items={favorites}
-        missing={favoritesExist}
+        kinds={favoriteKinds}
         {currentPath}
         {onNavigate}
+        {onNavigateUncounted}
         onChanged={api.favoritesChanged}
       />
     {:else if tab === 'history'}

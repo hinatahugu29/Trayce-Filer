@@ -7,6 +7,11 @@
   export let current = false
   /** 実在しない場所は沈ませる。消えたフォルダを掴んでも仕方がない。 */
   export let missing = false
+  /**
+   * 行頭に出す絵柄。★はファイルも持てるので、色帯だけでは荷物か場所か分からない。
+   * 空文字なら色帯だけの従来の見た目のまま。
+   */
+  export let icon = ''
 
   $: parts = splitPath(path)
 </script>
@@ -17,6 +22,7 @@
 -->
 <div class="row" class:current class:missing style="--hue: {pathHue(path)}" title={path}>
   <span class="band" />
+  {#if icon}<span class="icon">{icon}</span>{/if}
   <span class="text">
     <span class="tail">{parts.tail}</span>
     <span class="lead">{elideLeft(parts.lead, 34)}</span>
@@ -26,6 +32,13 @@
 </div>
 
 <style>
+  .icon {
+    flex: none;
+    align-self: center;
+    font-size: 11px;
+    line-height: 1;
+  }
+
   .row {
     display: flex;
     align-items: stretch;

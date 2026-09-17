@@ -577,27 +577,19 @@
   }
 
   /**
-   * ★欄へ落とされたものを登録する。
-   *
-   * いまはフォルダだけを受ける。★はそのまま検索ペインの「検索場所の候補」としても
-   * 使われており（SearchPane）、ファイルはルートになれない。
+   * ★欄へ落とされたものを登録する。場所もファイルも受ける。
    *
    * 何も言わずに捨てると、届かなかったのか無視されたのか分からないので、
-   * 登録・重複・見送りの件数をそれぞれ知らせる。
+   * 登録した件数と、すでに入っていた件数をそれぞれ知らせる。
    */
   async function acceptFavoriteDrop(paths: string[]) {
     if (paths.length === 0) return
-    const kinds = await api.pathKinds(paths)
-    const dirs = paths.filter((_, i) => kinds[i]?.isDir)
-    const skipped = paths.length - dirs.length
-
-    const added = dirs.length > 0 ? await api.addFavorites(dirs) : 0
+    const added = await api.addFavorites(paths)
     if (added > 0) api.favoritesChanged()
 
     const said: string[] = []
     if (added > 0) said.push(`${added}件を★へ登録`)
-    if (dirs.length > added) said.push(`${dirs.length - added}件はすでに登録済み`)
-    if (skipped > 0) said.push(`${skipped}件はフォルダーではないため見送り`)
+    if (paths.length > added) said.push(`${paths.length - added}件はすでに登録済み`)
     note(said.join(' / '))
   }
 

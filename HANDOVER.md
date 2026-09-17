@@ -59,7 +59,7 @@ results available as normal copy/move/preview/tray sources.
 - [x] Navigation-cost round — per-place view state, folder peek, in-place expansion, breadcrumb siblings, branch memory, filter-to-search promotion, adaptive prefetch, named pane layouts, window identity, attention-based column gradation, box selection, move-kind measurement, tray waypoints
 - [x] Left-hand keyboard round — single-key sorting (`A`/`S`/`X`/`Z`), direction-only reverse (`D`), sort every pane at once (`Shift+`), expand/collapse all (`E`), collect to tray (`C`), hidden files (`R`); search pane made honest about what stopping discards and wired to the same keys
 - [x] Favorites drop round (phase A) — register folders by dragging them onto the ★ panel, from a listing, another pane, or Explorer; add-only backend command, and one notification path that keeps every open ★ panel in step
-- [ ] Favorites drop round (phase B) — let files into ★ as a light launcher: stop treating a file as missing, give file rows an open verb plus `→` to reveal, filter the search-root reuse to folders, and decide how a jump from a file favourite is counted while the measurement window runs
+- [x] Favorites drop round (phase B) — files in ★ as a light launcher: kind-derived row verbs, search-root reuse filtered to folders, and jumps from a file favourite kept out of the movement tally
 - [ ] **Measurement window (next action)** — use the app normally for 1–2 weeks, then read Settings → 移動の集計 and decide the next investment from the data rather than from argument. Thresholds are printed next to the numbers. **The tally has not started yet**: `state.json` carried no `navTally` as of 2026-09-16, so the window begins at first use of a build from `caaa30f` onwards
 - [ ] Deferred until the measurement says so — an overview/teleport surface for Trayce, tray cycling (next/previous waypoint on one key), tray folder rows as drop targets
 - [ ] Search follow-up, deferred by the owner on 2026-09-16 — a search pane split from a search pane builds a second index of the same roots (accepted: duplicating is the user's own choice), and files created after the scan need a reload to appear. Both documented in `SPEC.md` §4.4; revisit only if real use makes either painful
@@ -305,6 +305,14 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 
   `toggle_favorite` could not be reused — it reverses membership, so dropping something already registered would have removed it. `add_favorites` is add-only and returns how many it actually added, which is what lets the notice distinguish registered from already-there. Its key function is deliberately separate from the neighbouring `search_location_key`, which trims `C:\` down to `C:`; harmless as a search-location key, wrong for a favourite, since a drive root is a plausible entry. A test pins that.
 
+  Phase B turned out to be mostly deletion. `Sidebar.svelte` was already fetching `{ exists, isDir }` for every favourite and then throwing the kind away — `favoritesExist = favoriteKinds.map((kind) => kind.isDir)`, with a comment saying a file is treated as missing because this panel lists places. Passing the kinds through instead is the whole of file support; the row verbs fall out of it.
+
+  The verbs mirror the tray rather than inventing anything: the tray does not ask what a collected item is for, it derives the verb from the kind and gives a folder one extra. Favourites are the same rule with the direction reversed — a folder's click already navigates, so it is the **file** that gains `→` (open its containing folder). The tray's hover treatment and hit-test separation carry over unchanged, so drag-to-reorder still works on file rows.
+
+  One thing had to be actively defended: ★ doubles as the search pane's list of candidate roots, and a file cannot be a root. Filtering happens in `refreshLocationHistory` — and `toggleCurrentScopeFavorite` was refetching the raw list right past that filter, so it now goes through the same function.
+
+  A jump from a file favourite is deliberately **not** counted. `open` grew a `counted` option for it. The measurement window decides whether to build an overview surface from the share of `other` moves; a new jump path introduced by this very feature would push that share up and argue for building something the feature has just made unnecessary.
+
   Also fixed while passing through: `bind:this={sidebar}` only ever bound the **upper** Sidebar, so `F` left the lower panel of a split sidebar stale. Favourite changes now go through one notifier in `api.ts` that every ★ panel and every path-bar ☆ subscribes to, which covers the new drop path and that old gap at once.
 
 ## Commit log
@@ -402,4 +410,5 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 - `76dfe69` — `fix: make breadcrumb siblings, marquee auto-scroll, and pane props behave`
 - `e082846` — `feat: put sorting and collecting under the left hand`
 - `5c66281` — `fix: tell the truth when a search is stopped, and match the pane keys`
-- `PENDING` — `feat: register favourite folders by dropping them`
+- `ce460ba` — `feat: register favourite folders by dropping them`
+- `PENDING` — `feat: keep files in favourites as a light launcher`
