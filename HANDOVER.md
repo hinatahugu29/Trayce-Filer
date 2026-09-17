@@ -411,4 +411,4 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 - `e082846` — `feat: put sorting and collecting under the left hand`
 - `5c66281` — `fix: tell the truth when a search is stopped, and match the pane keys`
 - `ce460ba` — `feat: register favourite folders by dropping them`
-- `PENDING` — `feat: keep files in favourites as a light launcher`
+- `b1b2c6e` — `feat: keep files in favourites as a light launcher`
