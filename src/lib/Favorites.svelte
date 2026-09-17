@@ -58,8 +58,14 @@
   }
 </script>
 
+<!--
+  data-drop-favorites は、窓へ落とされたファイルの当たり判定に使う印。
+  一覧の行からのドラッグは OS へ制御を渡すので DOM の drop は飛んでこない。
+  Filer 側が座標から要素を引いて、この印を見て行き先を決める。
+-->
 <div
   class="list"
+  data-drop-favorites
   on:pointermove={onPointerMove}
   on:pointerleave={() => {
     grab = null
@@ -95,7 +101,7 @@
 
   {#if items.length === 0}
     <p class="empty">
-      パス欄の ☆ を押すと<br />ここに登録されます
+      パス欄の ☆ を押すか<br />フォルダーをここへ<br />ドラッグすると登録されます
     </p>
   {/if}
 </div>

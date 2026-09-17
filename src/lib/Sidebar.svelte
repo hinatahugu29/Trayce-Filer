@@ -63,7 +63,12 @@
   // 履歴は移動のたびに増えるので、開きっぱなしでも古びないようにする。
   $: if (tab && currentPath) refresh()
 
-  onMount(refresh)
+  // お気に入りは全ペイン共有なので、どこで変わっても取り直す。自分で登録した時しか
+  // 直さないと、隣のペインと上下分割の下段が古いまま残る。
+  onMount(() => {
+    refresh()
+    return api.onFavoritesChanged(refresh)
+  })
 </script>
 
 <div class="sidebar">
@@ -120,7 +125,7 @@
         missing={favoritesExist}
         {currentPath}
         {onNavigate}
-        onChanged={refresh}
+        onChanged={api.favoritesChanged}
       />
     {:else if tab === 'history'}
       <History

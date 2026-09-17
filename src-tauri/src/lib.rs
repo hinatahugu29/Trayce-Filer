@@ -200,6 +200,7 @@ pub fn run() {
       windows::close_window,
       store::list_favorites,
       store::toggle_favorite_cmd,
+      store::add_favorites_cmd,
       store::remove_favorite,
       store::reorder_favorite,
       store::list_history,

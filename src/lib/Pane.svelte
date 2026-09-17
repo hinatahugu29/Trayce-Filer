@@ -785,7 +785,8 @@
   async function toggleFavorite() {
     if (!listing) return
     isFavorite = await api.toggleFavorite(listing.path)
-    sidebar?.refresh()
+    // 上段の Sidebar しか bind していないので、自前で呼ぶと下段が古いまま残る。
+    api.favoritesChanged()
   }
 
   /** 落とされたファイルをこのペインの場所へ取り込む。 */
@@ -1116,8 +1117,15 @@
   const FS_RELOAD_DEBOUNCE = 250
   const FS_RELOAD_MAX_WAIT = 1000
 
+  let unlistenFavorites: (() => void) | null = null
+
   onMount(async () => {
     await open(initialPath)
+
+    // 別のペインへ★を落とされた時にも、ここの ☆ が追従するようにする。
+    unlistenFavorites = api.onFavoritesChanged(() => {
+      syncFavoriteState()
+    })
 
     // 転送イベントは窓全体に飛ぶので、自分が始めたものだけ拾う。
     // 開始の応答（ID）より先に届いた分は、ID が分かるまで預かっておく。
@@ -1156,6 +1164,7 @@
     unlistenFs?.()
     unlistenProgress?.()
     unlistenDone?.()
+    unlistenFavorites?.()
     if (reloadTimer !== null) clearTimeout(reloadTimer)
     // 見張りを残したままペインを閉じると、監視が積み上がっていく。
     if (watched) api.unwatchDir(watched).catch(() => {})

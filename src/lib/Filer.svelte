@@ -576,6 +576,31 @@
     return tab.panes.find((p) => p.id === tab.activeId) ?? tab.panes[0]
   }
 
+  /**
+   * ★欄へ落とされたものを登録する。
+   *
+   * いまはフォルダだけを受ける。★はそのまま検索ペインの「検索場所の候補」としても
+   * 使われており（SearchPane）、ファイルはルートになれない。
+   *
+   * 何も言わずに捨てると、届かなかったのか無視されたのか分からないので、
+   * 登録・重複・見送りの件数をそれぞれ知らせる。
+   */
+  async function acceptFavoriteDrop(paths: string[]) {
+    if (paths.length === 0) return
+    const kinds = await api.pathKinds(paths)
+    const dirs = paths.filter((_, i) => kinds[i]?.isDir)
+    const skipped = paths.length - dirs.length
+
+    const added = dirs.length > 0 ? await api.addFavorites(dirs) : 0
+    if (added > 0) api.favoritesChanged()
+
+    const said: string[] = []
+    if (added > 0) said.push(`${added}件を★へ登録`)
+    if (dirs.length > added) said.push(`${dirs.length - added}件はすでに登録済み`)
+    if (skipped > 0) said.push(`${skipped}件はフォルダーではないため見送り`)
+    note(said.join(' / '))
+  }
+
   function onWindowKey(ev: KeyboardEvent) {
     const el = ev.target as HTMLElement | null
     if (el && (el.tagName === 'INPUT' || el.isContentEditable)) return
@@ -738,8 +763,17 @@
 
       // 物理座標で来るので、CSS ピクセルへ直してから当たり判定する。
       const dpr = window.devicePixelRatio || 1
-      const target = paneAt(event.payload.position.x / dpr, event.payload.position.y / dpr)
-      await target?.ref?.acceptDrop(event.payload.paths)
+      const x = event.payload.position.x / dpr
+      const y = event.payload.position.y / dpr
+
+      // paneAt は当たらなければアクティブペインへ落ちる（＝サイドバーへ落としても
+      // ペインのフォルダへコピーされる）ので、より内側の★欄を先に見る。
+      // 順を逆にすると、お気に入りへは永久に届かない。
+      if (document.elementFromPoint(x, y)?.closest('[data-drop-favorites]')) {
+        await acceptFavoriteDrop(event.payload.paths)
+        return
+      }
+      await paneAt(x, y)?.ref?.acceptDrop(event.payload.paths)
     })
 
     unlistenFocus = await win.onFocusChanged(({ payload }) => {

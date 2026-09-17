@@ -334,6 +334,45 @@ pub fn push_search_location(
   history.truncate(SEARCH_HISTORY_CAP);
 }
 
+/// お気に入りの同一性。Windows なので大文字小文字と区切りの向き・末尾を無視する。
+///
+/// 近くの `search_location_key` も似た正規化をするが、あちらは `C:\` を `C:` まで
+/// 削る。検索場所のキーとしては実害がないものの、お気に入りはドライブ直下を
+/// 登録しうるので別に持つ。フロント側の `pathIdentity` と規則を合わせてある。
+fn favorite_key(path: &str) -> String {
+  let trimmed = path.trim().replace('/', "\\");
+  let is_drive_root = trimmed.len() == 3 && trimmed.ends_with(":\\");
+  if is_drive_root {
+    trimmed.to_lowercase()
+  } else {
+    trimmed.trim_end_matches('\\').to_lowercase()
+  }
+}
+
+/// 落とされたパスを末尾へ足す。既に登録されているものは飛ばす。
+///
+/// `toggle_favorite` は名前どおり在籍を反転するので、ドロップからは呼べない。
+/// 登録済みのものを落とすと解除になり、足すつもりの操作で消えることになる。
+/// 戻り値は実際に足した件数で、呼ぶ側が「何件入ったか」を言えるようにする。
+pub fn add_favorites(favorites: &mut Vec<String>, paths: &[String]) -> usize {
+  let mut known: Vec<String> = favorites.iter().map(|p| favorite_key(p)).collect();
+  let mut added = 0;
+  for path in paths {
+    let path = path.trim();
+    if path.is_empty() {
+      continue;
+    }
+    let key = favorite_key(path);
+    if known.contains(&key) {
+      continue;
+    }
+    known.push(key);
+    favorites.push(path.to_string());
+    added += 1;
+  }
+  added
+}
+
 /// 登録されていなければ足し、されていれば外す。戻り値は操作後に登録されているか。
 pub fn toggle_favorite(favorites: &mut Vec<String>, path: &str) -> bool {
   if let Some(i) = favorites.iter().position(|p| p == path) {
@@ -466,6 +505,11 @@ pub fn list_favorites(app: AppHandle) -> Vec<String> {
 #[tauri::command]
 pub fn toggle_favorite_cmd(app: AppHandle, path: String) -> bool {
   app.state::<Store>().with(|s| toggle_favorite(&mut s.favorites, &path))
+}
+
+#[tauri::command]
+pub fn add_favorites_cmd(app: AppHandle, paths: Vec<String>) -> usize {
+  app.state::<Store>().with(|s| add_favorites(&mut s.favorites, &paths))
 }
 
 #[tauri::command]
@@ -699,6 +743,44 @@ mod tests {
     assert_eq!(f, vec![r"C:\a".to_string()]);
     assert!(!toggle_favorite(&mut f, r"C:\a"));
     assert!(f.is_empty());
+  }
+
+  #[test]
+  fn adding_favorites_skips_ones_already_there() {
+    let mut f = vec![r"C:\a".to_string()];
+    // 落とした3件のうち新しいのは2件。戻り値はその2件を指す。
+    let added = add_favorites(
+      &mut f,
+      &[r"C:\a".to_string(), r"C:\b".to_string(), r"C:\c".to_string()],
+    );
+    assert_eq!(added, 2);
+    assert_eq!(f, vec![r"C:\a", r"C:\b", r"C:\c"]);
+  }
+
+  #[test]
+  fn adding_favorites_ignores_case_and_trailing_separators() {
+    let mut f = vec![r"C:\Work".to_string()];
+    let added = add_favorites(&mut f, &[r"c:\work\".to_string(), "C:/Work".to_string()]);
+    assert_eq!(added, 0);
+    assert_eq!(f, vec![r"C:\Work"]);
+  }
+
+  #[test]
+  fn adding_favorites_keeps_a_drive_root_distinct() {
+    // 末尾の区切りを無条件に削ると C:\ が C: になり、別物が同じものになってしまう。
+    let mut f = Vec::new();
+    let added = add_favorites(&mut f, &[r"C:\".to_string(), "C:".to_string()]);
+    assert_eq!(added, 2);
+    assert_eq!(f, vec![r"C:\", "C:"]);
+  }
+
+  #[test]
+  fn adding_favorites_drops_duplicates_inside_one_drop() {
+    // 同じドロップに同じものが2つ入っていても、増えるのは1つだけ。空文字は数えない。
+    let mut f = Vec::new();
+    let added = add_favorites(&mut f, &[r"C:\a".to_string(), r"C:\A".to_string(), "  ".to_string()]);
+    assert_eq!(added, 1);
+    assert_eq!(f, vec![r"C:\a"]);
   }
 
   #[test]
