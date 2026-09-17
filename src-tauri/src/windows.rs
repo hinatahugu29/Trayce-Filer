@@ -9,6 +9,8 @@ pub const OVERLAY_LABEL: &str = "overlay";
 pub const WINDOW_TRAY_CHANGED: &str = "window-tray-changed";
 pub const ACTIVATE_PANE_REQUEST: &str = "activate-pane-request";
 pub const ACTIVATE_TAB_REQUEST: &str = "activate-tab-request";
+/// キーで窓を移った先だけに届く合図。到着した窓が縁を一瞬光らせる。
+pub const WINDOW_SWAP_ARRIVED: &str = "window-swap-arrived";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -210,7 +212,13 @@ pub fn swap_to_recent_window(app: AppHandle, from: String) -> Result<(), String>
     .collect();
 
   match pick_recent(&ordered, &from, |label| app.get_webview_window(label).is_some()) {
-    Some(label) => focus_window(app, label),
+    Some(label) => {
+      // 前面化そのものは見た目に出ないことがある。窓が重なっていると、
+      // 切り替えた先が元の窓を覆うだけで「何も起きなかった」ように見える。
+      // クリックで前面に来た時は光らせたくないので、focus ではなくここで報せる。
+      let _ = app.emit_to(&label, WINDOW_SWAP_ARRIVED, ());
+      focus_window(app, label)
+    }
     // 窓が1枚しかない時に失敗を返すと、押し間違えるたびに通知が出る。
     None => Ok(()),
   }

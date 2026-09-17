@@ -547,6 +547,7 @@ export const setWindowTray = (label: string, paths: string[]) =>
 export const WINDOW_TRAY_CHANGED = 'window-tray-changed'
 export const ACTIVATE_PANE_REQUEST = 'activate-pane-request'
 export const ACTIVATE_TAB_REQUEST = 'activate-tab-request'
+export const WINDOW_SWAP_ARRIVED = 'window-swap-arrived'
 export type WindowTrayChanged = { label: string; paths: string[] }
 export const touchWindow = (label: string) => invoke<void>('touch_window', { label })
 export const hideOverlay = () => invoke<void>('hide_overlay')

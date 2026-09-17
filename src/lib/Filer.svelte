@@ -654,6 +654,27 @@
   let unlistenTray: UnlistenFn | null = null
   let unlistenActivatePane: UnlistenFn | null = null
   let unlistenActivateTab: UnlistenFn | null = null
+  let unlistenSwapArrived: UnlistenFn | null = null
+
+  /** キーで移ってきた直後だけ立つ。枠を一瞬光らせるのに使う。 */
+  let swapArrived = false
+  let swapArrivedTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * 「ここへ来た」を枠で伝える。
+   *
+   * 窓が重なっていると、前面化しただけでは切り替わったことが見えない。
+   * Trayce の窓どうしは見た目がよく似ているので、パスを読むまで
+   * どちらに居るのか分からない時間が生まれる。
+   */
+  function flashArrival() {
+    if (swapArrivedTimer) clearTimeout(swapArrivedTimer)
+    swapArrived = true
+    swapArrivedTimer = setTimeout(() => {
+      swapArrived = false
+      swapArrivedTimer = null
+    }, 260)
+  }
 
   /** 起動に失敗した理由。ここが埋まる時は画面が空のままになるので必ず見せる。 */
   let bootError: string | null = null
@@ -808,6 +829,7 @@
       hoveredPaneId = null
       tabs = tabs
     })
+    unlistenSwapArrived = await listen(api.WINDOW_SWAP_ARRIVED, flashArrival)
   }
 
   onDestroy(() => {
@@ -816,12 +838,18 @@
     unlistenTray?.()
     unlistenActivatePane?.()
     unlistenActivateTab?.()
+    unlistenSwapArrived?.()
+    if (swapArrivedTimer) clearTimeout(swapArrivedTimer)
   })
 </script>
 
 <svelte:window on:keydown={onWindowKey} />
 
-<main class:hovering>
+<main
+  class:hovering
+  class:arrived={swapArrived}
+  style:--arrive-color={windowHue === null ? '#63cfad' : `hsl(${windowHue} 60% 55%)`}
+>
   <!-- 現在地の色帯。窓を並べた時の見分けに使う。 -->
   <div
     class="window-hue"
@@ -1036,10 +1064,24 @@
     height: 100vh;
     box-sizing: border-box;
     border: 2px solid transparent;
+    transition: border-color 200ms ease-out;
   }
-  /* 落とせる状態が分かるように枠を光らせる。 */
+  /* キーで移ってきた窓の縁を一瞬光らせる。色はその窓の色帯と同じものを使う。
+     現在地ごとに決まる色なので、光った色自体が「どの窓へ来たか」を含む。 */
+  main.arrived {
+    border-color: var(--arrive-color);
+    transition: border-color 60ms ease-in;
+  }
+  /* 落とせる状態が分かるように枠を光らせる。到着の点滅より優先する
+     （落とす直前に色が変わると、落とし先を見失う）。 */
   main.hovering {
     border-color: #4c9aff;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    main {
+      transition: none;
+    }
   }
 
   /* 現在地ごとに色が決まる細い帯。太くすると情報ではなく装飾になるので 2px に留める。 */
