@@ -418,6 +418,25 @@
   }
 
   /** カーソル位置の行を開く。フォルダなら移動、ファイルなら既定のアプリ。 */
+  /**
+   * 行そのものに焦点がある時の Enter。
+   *
+   * 行をクリックすると `tabindex="-1"` の行に焦点が移るため、Enter は行と一覧の
+   * 両方で拾われる。どちらも同じ行を開くので、1回の Enter で2回起動していた。
+   * 文書なら同じ窓が前に出るだけだが、実行ファイルは本当に2つ動く。
+   *
+   * Enter だけ止めるのは、まとめて止めると矢印・Home/End・並べ替えの単独キーが
+   * 一覧側へ届かなくなるため。
+   */
+  function onRowEnter(run: () => void) {
+    return (ev: KeyboardEvent) => {
+      if (ev.key !== 'Enter') return
+      ev.stopPropagation()
+      ev.preventDefault()
+      run()
+    }
+  }
+
   function activate(row: Row) {
     if (row.kind === 'up') return onOpen(row.path)
     if (row.kind === 'note') return
@@ -659,7 +678,7 @@
             style="height: {ROW_H}px"
             on:click={(e) => onRowClick(index, row, e)}
             on:dblclick={() => onOpen(row.path)}
-            on:keydown={(e) => e.key === 'Enter' && onOpen(row.path)}
+            on:keydown={onRowEnter(() => onOpen(row.path))}
           >
             <span class="col c-name"><span class="icon">↰</span><span class="name">..</span></span>
           </div>
@@ -686,7 +705,7 @@
             style="height: {ROW_H}px"
             on:click={(e) => onRowClick(index, row, e)}
             on:dblclick={() => activate(row)}
-            on:keydown={(e) => e.key === 'Enter' && activate(row)}
+            on:keydown={onRowEnter(() => activate(row))}
             on:contextmenu={(e) => onRowContext(index, row, e)}
             on:pointerdown={(e) => onPointerDown(row, e)}
           >
