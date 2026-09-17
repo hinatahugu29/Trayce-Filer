@@ -46,6 +46,8 @@ export type ActionId =
   | 'toggleHidden'
   | 'layouts'
   | 'swapWindow'
+  | 'cycleWindow'
+  | 'cycleWindowBack'
 
 export type ActionDef = {
   id: ActionId
@@ -84,6 +86,9 @@ export const ACTIONS: ActionDef[] = [
   // という規則にしてある。窓の層に破壊的な操作は置かない（切替キーの隣で
   // 指が滑ると、ペイン1枚ではなく窓ごと失うことになるため）。
   { id: 'swapWindow', label: '直前のウィンドウへ', fallback: 'Alt+Q', group: 'ウィンドウ' },
+  // 往復と巡回を同じキーに混ぜると、戻るつもりで進む事故になる。別々に割り当てる。
+  { id: 'cycleWindow', label: '次のウィンドウへ', fallback: 'Alt+W', group: 'ウィンドウ' },
+  { id: 'cycleWindowBack', label: '前のウィンドウへ', fallback: 'Alt+Shift+W', group: 'ウィンドウ' },
 
   { id: 'hoverParent', label: 'ポインター先で親へ', fallback: 'Q', group: '左手操作' },
   { id: 'hoverClosePane', label: 'ポインター先のペインを閉じる', fallback: 'W', group: '左手操作' },

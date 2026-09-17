@@ -12,6 +12,17 @@ pub const ACTIVATE_TAB_REQUEST: &str = "activate-tab-request";
 /// キーで窓を移った先だけに届く合図。到着した窓が縁を一瞬光らせる。
 pub const WINDOW_SWAP_ARRIVED: &str = "window-swap-arrived";
 
+/// 到着した窓が、並びの何番目かを知るための添え物。
+///
+/// 往復（Alt+Q）では `None` を送る。2枚を行き来している最中に毎回
+/// 番号が出ると、要らない情報が画面を叩き続けることになる。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwapArrival {
+  pub position: usize,
+  pub total: usize,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WindowTrayChanged {
@@ -216,10 +227,53 @@ pub fn swap_to_recent_window(app: AppHandle, from: String) -> Result<(), String>
       // 前面化そのものは見た目に出ないことがある。窓が重なっていると、
       // 切り替えた先が元の窓を覆うだけで「何も起きなかった」ように見える。
       // クリックで前面に来た時は光らせたくないので、focus ではなくここで報せる。
-      let _ = app.emit_to(&label, WINDOW_SWAP_ARRIVED, ());
+      let _ = app.emit_to(&label, WINDOW_SWAP_ARRIVED, None::<SwapArrival>);
       focus_window(app, label)
     }
     // 窓が1枚しかない時に失敗を返すと、押し間違えるたびに通知が出る。
+    None => Ok(()),
+  }
+}
+
+/// 画面に並んだ順で隣を選ぶ。戻り値は (ラベル, 1始まりの位置, 総数)。
+///
+/// MRU と違い、押しても並び自体は変わらない。だから3枚以上でも
+/// 「右へ、右へ」と押した通りに進み、行き先を予測できる。
+fn pick_neighbour(ordered: &[String], from: &str, delta: i32) -> Option<(String, usize, usize)> {
+  if ordered.len() < 2 {
+    return None;
+  }
+  let total = ordered.len();
+  // 自分が並びに居ない（登録直後など）時は先頭から数え始める。
+  let here = ordered.iter().position(|label| label == from).unwrap_or(0) as i32;
+  // 端では巻き戻す。rem_euclid なので delta が負でも負の添字にならない。
+  let next = (here + delta).rem_euclid(total as i32) as usize;
+  Some((ordered[next].clone(), next + 1, total))
+}
+
+/// 画面の並び順で隣の窓へ移る。Alt+W の受け口。
+#[tauri::command]
+pub fn cycle_window(app: AppHandle, from: String, delta: i32) -> Result<(), String> {
+  // 左から右、同じ列なら上から下。ラベル順は生成順で画面とは無関係なので、
+  // 座標が同じ時の同点分解にだけ使う（並びが毎回変わると巡回が予測できない）。
+  let mut placed: Vec<(i32, i32, String)> = app
+    .state::<Registry>()
+    .sorted()
+    .into_iter()
+    .filter_map(|info| {
+      let win = app.get_webview_window(&info.label)?;
+      let position = win.outer_position().ok()?;
+      Some((position.x, position.y, info.label))
+    })
+    .collect();
+  placed.sort_by(|a, b| (a.0, a.1, &a.2).cmp(&(b.0, b.1, &b.2)));
+
+  let ordered: Vec<String> = placed.into_iter().map(|(_, _, label)| label).collect();
+  match pick_neighbour(&ordered, &from, delta) {
+    Some((label, position, total)) => {
+      let _ = app.emit_to(&label, WINDOW_SWAP_ARRIVED, Some(SwapArrival { position, total }));
+      focus_window(app, label)
+    }
     None => Ok(()),
   }
 }
@@ -484,6 +538,26 @@ mod tests {
   fn has_nowhere_to_go_with_a_single_window() {
     let ordered = vec!["main".to_string()];
     assert_eq!(pick_recent(&ordered, "main", |_| true), None);
+  }
+
+  #[test]
+  fn walks_the_row_in_both_directions() {
+    let row = vec!["left".to_string(), "middle".to_string(), "right".to_string()];
+    assert_eq!(pick_neighbour(&row, "left", 1), Some(("middle".into(), 2, 3)));
+    assert_eq!(pick_neighbour(&row, "middle", -1), Some(("left".into(), 1, 3)));
+  }
+
+  #[test]
+  fn wraps_around_at_both_ends() {
+    let row = vec!["left".to_string(), "middle".to_string(), "right".to_string()];
+    assert_eq!(pick_neighbour(&row, "right", 1), Some(("left".into(), 1, 3)));
+    // 負の剰余で添字が壊れやすいのはこちら側。
+    assert_eq!(pick_neighbour(&row, "left", -1), Some(("right".into(), 3, 3)));
+  }
+
+  #[test]
+  fn a_lone_window_has_no_neighbour() {
+    assert_eq!(pick_neighbour(&["main".to_string()], "main", 1), None);
   }
 
   #[test]

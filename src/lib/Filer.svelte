@@ -599,9 +599,15 @@
     // 窓の切替だけは入力欄のガードより手前に置く。Alt 修飾は文字を生まないので
     // 絞り込み欄や検索語欄の入力を奪わないし、探している最中こそ隣の窓を
     // 見たくなる。preventDefault は Alt を離した時のシステムメニュー音も止める。
-    if (matchAction(ev, settings.shortcuts) === 'swapWindow') {
+    const windowAction = matchAction(ev, settings.shortcuts)
+    if (windowAction === 'swapWindow') {
       ev.preventDefault()
       api.swapToRecentWindow(label)
+      return
+    }
+    if (windowAction === 'cycleWindow' || windowAction === 'cycleWindowBack') {
+      ev.preventDefault()
+      api.cycleWindow(label, windowAction === 'cycleWindow' ? 1 : -1)
       return
     }
 
@@ -667,7 +673,11 @@
    * Trayce の窓どうしは見た目がよく似ているので、パスを読むまで
    * どちらに居るのか分からない時間が生まれる。
    */
-  function flashArrival() {
+  function flashArrival(arrival: api.SwapArrival) {
+    // 巡回の時だけ何番目かを言う。往復は2枚を行き来するだけなので、
+    // 番号を出しても「1/2 と 2/2 が交互に出る」以上の意味を持たない。
+    if (arrival) note(`${arrival.position}/${arrival.total} 番目のウィンドウ`)
+
     if (swapArrivedTimer) clearTimeout(swapArrivedTimer)
     swapArrived = true
     swapArrivedTimer = setTimeout(() => {
@@ -829,7 +839,9 @@
       hoveredPaneId = null
       tabs = tabs
     })
-    unlistenSwapArrived = await listen(api.WINDOW_SWAP_ARRIVED, flashArrival)
+    unlistenSwapArrived = await listen<api.SwapArrival>(api.WINDOW_SWAP_ARRIVED, ({ payload }) =>
+      flashArrival(payload)
+    )
   }
 
   onDestroy(() => {

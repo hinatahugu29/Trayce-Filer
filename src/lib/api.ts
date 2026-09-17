@@ -523,6 +523,9 @@ export const focusWindow = (label: string) => invoke<void>('focus_window', { lab
 /** 直前まで使っていた窓と入れ替わる。`from` は今この窓のラベル。 */
 export const swapToRecentWindow = (from: string) =>
   invoke<void>('swap_to_recent_window', { from })
+/** 画面の並び順で隣の窓へ移る。`delta` は +1 が右（下）方向。 */
+export const cycleWindow = (from: string, delta: number) =>
+  invoke<void>('cycle_window', { from, delta })
 export const focusPane = (label: string, paneId: number) =>
   invoke<void>('focus_pane', { label, paneId })
 export const focusTab = (label: string, tabId: number) =>
@@ -548,6 +551,8 @@ export const WINDOW_TRAY_CHANGED = 'window-tray-changed'
 export const ACTIVATE_PANE_REQUEST = 'activate-pane-request'
 export const ACTIVATE_TAB_REQUEST = 'activate-tab-request'
 export const WINDOW_SWAP_ARRIVED = 'window-swap-arrived'
+/** 巡回で来た時だけ付く、並びの中での位置。往復（Alt+Q）では null。 */
+export type SwapArrival = { position: number; total: number } | null
 export type WindowTrayChanged = { label: string; paths: string[] }
 export const touchWindow = (label: string) => invoke<void>('touch_window', { label })
 export const hideOverlay = () => invoke<void>('hide_overlay')
