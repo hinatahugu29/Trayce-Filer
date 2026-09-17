@@ -417,3 +417,4 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 - `cc1b18f` — `feat: let a window hand focus back to the one before it`
 - `62042fc` — `feat: put the window swap under Alt+Q`
 - `3f20dbe` — `feat: flash the edge of the window you land in`
+- `be81312` — `feat: walk the windows in the order they sit on screen`
