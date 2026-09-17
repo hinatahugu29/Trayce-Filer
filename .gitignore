@@ -16,3 +16,6 @@ Thumbs.db
 *.local
 .vscode/*
 !.vscode/extensions.json
+
+# Claude Code の端末固有設定（許可リストなど）
+.claude/settings.local.json
