@@ -180,6 +180,42 @@ pub fn focus_window(app: AppHandle, label: String) -> Result<(), String> {
   Ok(())
 }
 
+/// MRU順のラベル列から「自分ではなく、まだ生きている」最初の窓を選ぶ。
+///
+/// 窓の存在確認を引数で受け取るのは、ここが選定の全てだからである。
+/// AppHandle を握ったままだとテストから触れず、一番間違えやすい
+/// 「自分自身へ切り替えて何も起きない」を検出できない。
+fn pick_recent(
+  ordered: &[String],
+  from: &str,
+  alive: impl Fn(&str) -> bool,
+) -> Option<String> {
+  ordered
+    .iter()
+    .find(|label| label.as_str() != from && alive(label))
+    .cloned()
+}
+
+/// 直前まで使っていた窓と入れ替わる。Alt+Q の受け口。
+///
+/// 切り替えた先は focus_window が last_focused を更新するので、
+/// もう一度押すと元の窓へ戻る。往復のための状態を別に持つ必要はない。
+#[tauri::command]
+pub fn swap_to_recent_window(app: AppHandle, from: String) -> Result<(), String> {
+  let ordered: Vec<String> = app
+    .state::<Registry>()
+    .sorted()
+    .into_iter()
+    .map(|info| info.label)
+    .collect();
+
+  match pick_recent(&ordered, &from, |label| app.get_webview_window(label).is_some()) {
+    Some(label) => focus_window(app, label),
+    // 窓が1枚しかない時に失敗を返すと、押し間違えるたびに通知が出る。
+    None => Ok(()),
+  }
+}
+
 /// 指定ペインを選んでから、その窓を前面へ出す。
 #[tauri::command]
 pub fn focus_pane(app: AppHandle, label: String, pane_id: u32) -> Result<(), String> {
@@ -417,6 +453,29 @@ mod tests {
     let sorted = reg.sorted();
     assert_eq!(sorted[0].label, "filer-2");
     assert_eq!(sorted[1].label, "filer-1");
+  }
+
+  #[test]
+  fn picks_the_most_recent_window_that_is_not_me() {
+    let ordered = vec!["filer-2".to_string(), "filer-1".to_string(), "main".to_string()];
+    // 押した窓が先頭に居る（＝今フォーカスがある）のが通常の状態。
+    assert_eq!(pick_recent(&ordered, "filer-2", |_| true), Some("filer-1".into()));
+    // touch_window が間に合わず自分が先頭でなくても、自分は飛ばす。
+    assert_eq!(pick_recent(&ordered, "filer-1", |_| true), Some("filer-2".into()));
+  }
+
+  #[test]
+  fn skips_windows_that_are_already_gone() {
+    let ordered = vec!["filer-2".to_string(), "filer-1".to_string()];
+    // 閉じた直後はレジストリに残っていることがある。ここで飛ばさないと
+    // 存在しない窓を前面にしようとして失敗通知が出る。
+    assert_eq!(pick_recent(&ordered, "main", |label| label == "filer-1"), Some("filer-1".into()));
+  }
+
+  #[test]
+  fn has_nowhere_to_go_with_a_single_window() {
+    let ordered = vec!["main".to_string()];
+    assert_eq!(pick_recent(&ordered, "main", |_| true), None);
   }
 
   #[test]
