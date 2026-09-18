@@ -315,6 +315,18 @@
    * ように、この機能を足したこと自体が生んだ跳躍を数えると、`other` の割合で
    * 俯瞰画面の要否を決める計測（Settings → 移動の集計）が自分の足で歪む。
    */
+  /**
+   * 移動の世代。古い読み込みの結果を捨てるために持つ。
+   *
+   * ディスクを読むコマンドはメインスレッドの外で走るので、**先に始めた読み込みが
+   * 後から終わることがある**。大きいフォルダを開いてすぐ小さいフォルダへ移ると、
+   * 小さい方が先に描かれ、その後から大きい方が到着して画面を奪う。
+   *
+   * 上書きされるのは一覧だけではない。履歴・監視対象・「戻る」先・移動の集計まで
+   * 別の場所のもので埋まるので、見た目が直っても中身が食い違ったままになる。
+   */
+  let openGeneration = 0
+
   export async function open(path: string, { counted = true }: { counted?: boolean } = {}) {
     // パスバー・一覧・ツリー・履歴・Q キーはすべてここを通るので、固定の判定はここだけでよい。
     // 表示前（起動直後）は固定していても最初の場所を開く。
@@ -335,10 +347,14 @@
       sort = { ...sort, key: remembered.sortKey, descending: remembered.sortDescending }
     }
 
+    const generation = ++openGeneration
     try {
       const t0 = performance.now()
       // 直前まで見ていた場所へ戻る時は控えが効く。往復の体感を消すのが狙い。
-      listing = await prefetch.listDir(path, sort)
+      const fetched = await prefetch.listDir(path, sort)
+      // この間に次の移動が始まっていたら、ここから先は何も触らない。
+      if (generation !== openGeneration) return
+      listing = fetched
       const took = Math.round(performance.now() - t0)
       if (took >= SLOW_LOAD_MS) {
         api.logUi('warn', `読み込みに ${took}ms: ${listing.entries.length}件 ${path}`)
@@ -373,6 +389,10 @@
         })
       }
 
+      // 見え方を戻す間にも移動は挟まる。履歴と監視は取り消しの効かない副作用なので、
+      // ここでもう一度確かめてから進む。
+      if (generation !== openGeneration) return
+
       // 訪れた場所を履歴に積む。ここが「さっき見てたやつ」を辿る唯一の入口。
       await api.recordHistory(listing.path)
       await syncFavoriteState()
@@ -382,6 +402,8 @@
       // ここ自体が遅かった場所（ネットワークドライブなど）では対象を絞る。
       prefetch.warm(listing, sort, took)
     } catch (e) {
+      // 古い読み込みの失敗で、いま見えている場所にエラーを出さない。
+      if (generation !== openGeneration) return
       error = String(e)
     }
     await refreshUndoState()
@@ -390,13 +412,19 @@
   /** 表示中の場所を保ったまま引き直す。 */
   export async function reload() {
     if (!listing) return
+    // 引き直しは今いる場所が前提なので、世代は進めず確かめるだけにする。進めると、
+    // 監視通知で始まった引き直しが、利用者の移動を追い越して古い場所を描いてしまう。
+    const generation = openGeneration
     try {
       // 引き直しが目的なので控えは使わない。読めた内容で控えを差し替える。
       prefetch.invalidate(listing.path)
-      listing = await api.listDir(listing.path, sort)
+      const fetched = await api.listDir(listing.path, sort)
+      if (generation !== openGeneration) return
+      listing = fetched
       prefetch.remember(listing, sort)
       error = null
     } catch (e) {
+      if (generation !== openGeneration) return
       error = String(e)
     }
     // 一覧が変わりうるタイミングは、大抵ここに集約される

@@ -58,14 +58,32 @@
    * 1件につき最大2回 stat するため、★が切断されたネットワークドライブを
    * 指していると、見えてもいない欄のためにそこへ問い合わせに行くことになる。
    */
+  /**
+   * 取り直しの世代。一覧とその種別を必ず同じ回のもので揃えるために持つ。
+   *
+   * `listFavorites` と `pathKinds` の2回に分かれていて、種別は添字で一覧と
+   * 対応する。取り直しが重なると、新しい一覧に古い種別が乗ることがある。
+   * ずれた種別は見た目だけの問題では済まない——★のファイルがフォルダと
+   * 判定され、クリックでそこへ「移動」しようとする。
+   */
+  let favoriteGeneration = 0
+  let historyGeneration = 0
+
   async function refreshFavorites() {
-    favorites = await api.listFavorites()
-    favoriteKinds = tab === 'favorites' ? await api.pathKinds(favorites) : []
+    const generation = ++favoriteGeneration
+    const list = await api.listFavorites()
+    const kinds = tab === 'favorites' ? await api.pathKinds(list) : []
+    if (generation !== favoriteGeneration) return
+    favorites = list
+    favoriteKinds = kinds
   }
 
   async function refreshHistory() {
-    history = await api.listHistory()
-    const kinds = await api.pathKinds(history.map((h) => h.path))
+    const generation = ++historyGeneration
+    const list = await api.listHistory()
+    const kinds = await api.pathKinds(list.map((h) => h.path))
+    if (generation !== historyGeneration) return
+    history = list
     // 履歴は場所だけを並べる欄なので、ファイルに置き換わっていたら「無い」と同じに扱う。
     historyExist = kinds.map((kind) => kind.isDir)
   }
