@@ -297,8 +297,12 @@
 
   async function rewatch(path: string) {
     if (watched === path) return
-    if (watched) await api.unwatchDir(watched).catch(() => {})
+    // 見張り先は待つ前に確定させる。await の間にもう一度呼ばれると、
+    // どちらも同じ場所を外しに行き（他のペインの監視まで止まる）、
+    // その間に張った監視は誰も外さないまま残る。
+    const previous = watched
     watched = path
+    if (previous) await api.unwatchDir(previous).catch(() => {})
     await api.watchDir(path).catch(() => {})
   }
 

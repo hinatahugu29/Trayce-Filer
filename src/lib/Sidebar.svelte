@@ -37,27 +37,31 @@
 
   function chooseTab(next: api.SidebarTab) {
     tab = next
+    afterTabChange()
+  }
+
+  /**
+   * 欄を切り替えた後の始末。見出しのボタンと、上下分割時の選択欄の両方から通る。
+   *
+   * 欄を開き直した時だけ、覚えている実在を捨てて確かめ直す。移動のたびの
+   * 再確認はやめたので、外で消されたフォルダに印が付く機会はここになる。
+   */
+  function afterTabChange() {
+    if (tab === 'history') historyKnown = new Map()
     onTabChange()
   }
 
   let favorites: string[] = []
+  /**
+   * ★の種別（実在・ファイルかフォルダか）。一覧を描く時にしか要らない。
+   *
+   * 1件につき最大2回 stat するため、★が切断されたネットワークドライブを
+   * 指していると、見えてもいない欄のためにそこへ問い合わせに行くことになる。
+   */
   let favoriteKinds: api.PathKind[] = []
   let history: HistoryEntry[] = []
   let historyExist: boolean[] = []
 
-  /**
-   * 保存されている場所の実在確認。
-   *
-   * お気に入りも履歴も、消えたフォルダを指したまま残る。
-   * 掴んでから「開けません」と言われるより、先に灰色で示す方が親切。
-   */
-  /**
-   * ★の一覧。見出しに件数を出すので、開いていなくても持っておく。
-   *
-   * 種別（実在・ファイルかフォルダか）は一覧を描く時にしか要らない。
-   * 1件につき最大2回 stat するため、★が切断されたネットワークドライブを
-   * 指していると、見えてもいない欄のためにそこへ問い合わせに行くことになる。
-   */
   /**
    * 取り直しの世代。一覧とその種別を必ず同じ回のもので揃えるために持つ。
    *
@@ -78,14 +82,37 @@
     favoriteKinds = kinds
   }
 
+  /**
+   * 履歴のパスごとの実在。既に調べたものは持ち越す。
+   *
+   * 履歴は最大200件あり、実在確認は1件につき最大2回のstatになる。移動のたびに
+   * 全件を調べ直すと、履歴欄を開いている間だけ移動が重くなる。移動で変わるのは
+   * 先頭に積まれる1件だけなので、知らないパスだけ調べれば足りる。
+   *
+   * 外で消されたフォルダは、欄を開き直すまで印が付かない。取り逃しても
+   * 掴んだ時に「開けません」と出るだけなので、移動を毎回重くするより軽い代償である。
+   */
+  let historyKnown = new Map<string, boolean>()
+
   async function refreshHistory() {
     const generation = ++historyGeneration
     const list = await api.listHistory()
-    const kinds = await api.pathKinds(list.map((h) => h.path))
+
+    const unknown = [...new Set(list.map((h) => h.path).filter((p) => !historyKnown.has(p)))]
+    if (unknown.length > 0) {
+      const kinds = await api.pathKinds(unknown)
+      if (generation !== historyGeneration) return
+      // 履歴は場所だけを並べる欄なので、ファイルに置き換わっていたら「無い」と同じに扱う。
+      unknown.forEach((path, i) => historyKnown.set(path, kinds[i]?.isDir ?? false))
+    }
     if (generation !== historyGeneration) return
+
+    // 消えた履歴ぶんは捨てる。放っておくと窓を開いている間ずっと増える。
+    const live = new Set(list.map((h) => h.path))
+    for (const path of historyKnown.keys()) if (!live.has(path)) historyKnown.delete(path)
+
     history = list
-    // 履歴は場所だけを並べる欄なので、ファイルに置き換わっていたら「無い」と同じに扱う。
-    historyExist = kinds.map((kind) => kind.isDir)
+    historyExist = list.map((h) => historyKnown.get(h.path) ?? false)
   }
 
   /** 外から促された時の入口。表示している欄のぶんだけ取り直す。 */
@@ -118,7 +145,7 @@
 <div class="sidebar">
   {#if compact}
     <div class="compact-head">
-      <select bind:value={tab} aria-label="表示する情報" on:change={onTabChange}>
+      <select bind:value={tab} aria-label="表示する情報" on:change={afterTabChange}>
         <option value="tree">ツリー</option>
         <option value="favorites">★ お気に入り</option>
         <option value="history">履歴</option>
