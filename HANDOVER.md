@@ -443,3 +443,9 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 - `62042fc` — `feat: put the window swap under Alt+Q`
 - `3f20dbe` — `feat: flash the edge of the window you land in`
 - `be81312` — `feat: walk the windows in the order they sit on screen`
+- `9a6c290` — `perf: keep disk reads off the main thread`
+- `e5b7497` — `perf: fold names once per listing instead of once per keystroke`
+- `741c98f` — `perf: send window context once per change, not once per assignment`
+- `ab50d04` — `perf: only refresh the sidebar list that is actually showing`
+- `b0d19a6` — `fix: carry a tab's work state across a switch`
+- `fbb315b` — `perf: fold the things that do not change once`
