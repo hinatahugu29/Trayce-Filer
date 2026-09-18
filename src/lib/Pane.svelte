@@ -273,8 +273,23 @@
    */
   let filter = ''
   $: filterKey = api.foldForSearch(filter)
+  /**
+   * 畳んだ名前を一覧ごとに1度だけ作る。
+   *
+   * 打鍵のたびに全件を畳み直すと、3万件のフォルダで1打鍵40〜55msかかり、
+   * 打つほど遅れが積もる。畳むのは一覧が変わった時だけでよい。
+   *
+   * 絞り込みが空の間は作らない。ほとんどの表示では一度も絞り込まないので、
+   * 先に作ると読み込みのたびに使われない計算を足すことになる。
+   */
+  let foldedFor: api.Entry[] | null = null
+  let foldedNames: string[] = []
+  $: if (filterKey && foldedFor !== allEntries) {
+    foldedFor = allEntries
+    foldedNames = allEntries.map((e) => api.foldForSearch(e.name))
+  }
   $: entries = filterKey
-    ? allEntries.filter((e) => api.foldForSearch(e.name).includes(filterKey))
+    ? allEntries.filter((_, i) => foldedNames[i]?.includes(filterKey))
     : allEntries
 
   /** いま監視を頼んでいる場所。移る時に必ず外して二重登録を防ぐ。 */
