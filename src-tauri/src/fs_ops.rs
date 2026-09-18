@@ -276,7 +276,9 @@ pub fn transfer_conflicts(paths: Vec<String>, dest: String) -> Vec<String> {
     .filter_map(|p| {
       let src = Path::new(p);
       let name = src.file_name()?;
-      if src.parent() == Some(dest_dir) {
+      // 転送側と同じ判定にしておく。ここだけ文字列で比べると、実際には
+      // 何も起きない同じ場所への転送に、衝突の確認だけが出る。
+      if src.parent().is_some_and(|parent| is_same_entry(parent, dest_dir)) {
         return None;
       }
       dest_dir.join(name).exists().then(|| name.to_string_lossy().to_string())
@@ -396,11 +398,13 @@ fn transfer_with_policy(
       return Err(format!("{p} のファイル名を取得できません"));
     };
 
-    // 自分自身の中へ入れようとした場合は何もしない（無限再帰やデータ消失を避ける）。
-    if src.parent() == Some(dest_dir) {
+    // 同じフォルダへ落とした場合は何もしない。つづり違いで素通りすると、
+    // 上書きを選んだ時に「既存」として自分自身をゴミ箱へ送ってしまう。
+    if src.parent().is_some_and(|parent| is_same_entry(parent, dest_dir)) {
       continue;
     }
-    if src.is_dir() && dest_dir.starts_with(&src) {
+    // 自分自身の中へ入れようとした場合も止める（無限再帰やデータ消失を避ける）。
+    if src.is_dir() && is_inside(dest_dir, &src) {
       return Err(format!("{p} を自身の下へは移動できません"));
     }
 
@@ -414,7 +418,7 @@ fn transfer_with_policy(
         ConflictPolicy::Skip => continue,
         ConflictPolicy::Overwrite => {
           // 既存が転送元を含んでいると、既存を退かした時点で転送元ごと消える。
-          if src.starts_with(&direct) {
+          if is_inside(&src, &direct) {
             return Err(format!("{p} を含む {} は上書きできません", direct.display()));
           }
           discard(&direct)?;
@@ -1007,6 +1011,22 @@ fn split_for_completion(input: &str) -> (String, String) {
   }
 }
 
+/// `inner` が `outer` と同じか、その下にあるか。
+///
+/// パス文字列のままでは判定できない。Windowsは大文字小文字を区別しないのに、
+/// `Path::starts_with` が無視するのはドライブ文字だけで、フォルダ名は区別する。
+/// 実測: `c:\work\sub`.starts_with(`C:\Work`) は false になる。
+/// アドレスバーには好きなつづりを打てるので、同じ場所を別のつづりで開けてしまう。
+///
+/// ジャンクション越しに同じ場所へ届く経路もあるため、実体まで解決してから比べる。
+/// 解決できない場合だけ文字列の比較へ落とす（弾き漏らすより弾きすぎる方が安全）。
+fn is_inside(inner: &Path, outer: &Path) -> bool {
+  match (inner.canonicalize(), outer.canonicalize()) {
+    (Ok(inner), Ok(outer)) => inner.starts_with(&outer),
+    _ => inner.starts_with(outer),
+  }
+}
+
 /// 2つのパスが同じ実体を指しているか。
 /// 正規化して比べることで、大文字小文字の違いや `.` を含む表記の揺れを吸収する。
 fn is_same_entry(a: &Path, b: &Path) -> bool {
@@ -1341,6 +1361,33 @@ mod tests {
 
     assert!(done.is_empty());
     assert!(!root.join("a (2).txt").exists());
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// つづり違いでも同じ場所として扱う。
+  ///
+  /// アドレスバーには好きなつづりを打てるので、片方のペインが `Work`、
+  /// もう片方が `work` を開いている状態は普通に作れる。`Path::starts_with` は
+  /// フォルダ名の大文字小文字を区別するため、そこを素通りしていた。
+  #[test]
+  fn guards_still_hold_when_the_spelling_differs() {
+    let root = scratch("case_guard");
+    let outer = root.join("Work");
+    let inner = outer.join("Sub");
+    std::fs::create_dir_all(&inner).unwrap();
+    std::fs::write(outer.join("a.txt"), b"x").unwrap();
+
+    // 自身の下へは、つづりが違っても入れられない。
+    let lower_inner = s(&root.join("work").join("sub"));
+    assert!(accept_dropped(vec![s(&outer)], lower_inner, true).is_err());
+    assert!(outer.exists(), "拒否したので元は無傷であるべき");
+
+    // 同じフォルダへ落としたのなら、つづりが違っても複製しない。
+    let lower_outer = s(&root.join("work"));
+    let done = accept_dropped(vec![s(&outer.join("a.txt"))], lower_outer, false).unwrap();
+    assert!(done.is_empty());
+    assert!(!outer.join("a (2).txt").exists());
+
     let _ = std::fs::remove_dir_all(&root);
   }
 
