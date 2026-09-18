@@ -588,7 +588,7 @@
   }
 
   async function finishTransfer(payload: api.DoneEvent) {
-    const { cancelled, created, completedSources, error: err } = payload
+    const { cancelled, created, completedSources, linksSkipped, error: err } = payload
     const completedTrayMove = trayTransfer?.moveFiles ? completedSources : []
     progress = null
     transferId = null
@@ -602,7 +602,11 @@
     } else if (cancelled) {
       onNote('転送を中断しました')
     } else {
-      onNote(`転送 ${created}件`)
+      // 飛ばしたリンクを黙って落とすと「コピーしたはずのものが無い」になる。
+      const skipped = linksSkipped
+        ? `（リンク ${linksSkipped}件は中へ降りずに飛ばしました）`
+        : ''
+      onNote(`転送 ${created}件${skipped}`)
     }
     await reload()
     await startNextJob()

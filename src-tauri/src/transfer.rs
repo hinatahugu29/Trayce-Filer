@@ -43,6 +43,8 @@ pub struct DoneEvent {
   pub error: Option<String>,
   /// 実際に転送を完了した入力元。トレイ等が試行ではなく実績で状態を更新するために返す。
   pub completed_sources: Vec<String>,
+  /// 中へ降りずに飛ばしたリンクの数。0 でなければ、その旨を利用者に伝える。
+  pub links_skipped: u64,
 }
 
 /// コピー / 移動を始める。戻り値は中断に使う ID。
@@ -91,7 +93,12 @@ pub fn start_transfer(
     let start_time = Instant::now();
     let mut last_time = Instant::now() - Duration::from_secs(1);
 
+    // 飛ばしたリンクの数は、進捗の間引きに巻き込まれない場所で拾う。
+    // 下の早期 return の後ろに置くと、100ms 以内に片付いた転送で数が落ちる。
+    let links_skipped = std::cell::Cell::new(0u64);
+
     let mut on_progress = |p: &super::fs_ops::Progress, current: &str| {
+      links_skipped.set(p.links_skipped);
       let now = Instant::now();
       let elapsed_since_last = now.duration_since(last_time);
       if elapsed_since_last < Duration::from_millis(100) {
@@ -157,7 +164,7 @@ pub fn start_transfer(
     app.state::<Transfers>().running.lock().unwrap().remove(&id);
     let _ = app.emit(
       TRANSFER_DONE,
-      DoneEvent { id, dest, created, cancelled, error, completed_sources },
+      DoneEvent { id, dest, created, cancelled, error, completed_sources, links_skipped: links_skipped.get() },
     );
   });
 

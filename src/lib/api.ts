@@ -309,6 +309,8 @@ export type DoneEvent = {
   cancelled: boolean
   error: string | null
   completedSources: string[]
+  /** 中へ降りずに飛ばしたリンクの数。0 でなければ利用者に伝える。 */
+  linksSkipped: number
 }
 
 /**

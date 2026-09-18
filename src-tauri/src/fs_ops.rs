@@ -290,6 +290,9 @@ pub fn transfer_conflicts(paths: Vec<String>, dest: String) -> Vec<String> {
 pub struct Progress {
   pub bytes_done: u64,
   pub files_done: u64,
+  /// 中へ降りずに飛ばしたジャンクション・シンボリックリンクの数。
+  /// 黙って減らすと「コピーしたはずのものが無い」になるので、呼び出し側が知らせる。
+  pub links_skipped: u64,
 }
 
 /// 進捗付きで転送する。`transfer` モジュールから呼ぶ入口。
@@ -385,7 +388,7 @@ fn transfer_with_policy(
     return Err(format!("{dest} はディレクトリではありません"));
   }
 
-  let mut progress = Progress { bytes_done: 0, files_done: 0 };
+  let mut progress = Progress { bytes_done: 0, files_done: 0, links_skipped: 0 };
   let mut done = Vec::new();
 
   for p in paths {
@@ -618,7 +621,22 @@ fn copy_dir_all(
     }
     let entry = entry?;
     let target = dst.join(entry.file_name());
-    let completed = if entry.file_type()?.is_dir() {
+    let kind = entry.file_type()?;
+
+    // リンクの中へは降りない。
+    //
+    // ジャンクションは中身ではなく別の場所への指し示しで、祖先を指していることがある。
+    // Windowsの利用者プロファイルには実際にそういうものが置かれている
+    // （`AppData\Local\Application Data` は `AppData\Local` 自身を指す）。
+    // 辿ると自分の中を無限に降り続け、スタックを使い果たしてプロセスごと落ちる。
+    // 落ちれば開いていた窓もセッションも道連れになる。
+    if kind.is_symlink() {
+      progress.links_skipped += 1;
+      on_progress(progress, &entry.path().to_string_lossy());
+      continue;
+    }
+
+    let completed = if kind.is_dir() {
       copy_dir_all(&entry.path(), &target, cancel, progress, on_progress)?
     } else {
       copy_file(&entry.path(), &target, cancel, progress, on_progress)?
