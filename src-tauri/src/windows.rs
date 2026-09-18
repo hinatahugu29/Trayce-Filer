@@ -296,18 +296,6 @@ pub fn focus_tab(app: AppHandle, label: String, tab_id: u32) -> Result<(), Strin
   focus_window(app, label)
 }
 
-/// 窓がディレクトリを移動したことを登録する。
-/// タイトルバーにもパスを出しておくと、タスクバーのプレビューからも判別できる。
-#[tauri::command]
-pub fn set_window_path(app: AppHandle, label: String, path: String) {
-  if let Some(info) = app.state::<Registry>().windows.lock().unwrap().get_mut(&label) {
-    info.path = path.clone();
-  }
-  if let Some(win) = app.get_webview_window(&label) {
-    let _ = win.set_title(&path);
-  }
-}
-
 /// 現在タブの全ペインを俯瞰UIへ共有する。
 #[tauri::command]
 pub fn set_window_context(
@@ -318,12 +306,11 @@ pub fn set_window_context(
   panes: Vec<WindowPaneInfo>,
   tabs: Vec<WindowTabInfo>,
 ) {
-  let active_path = app
+  // タイトルはフロント側だけが決める。ここでも設定すると、同じ通知を受けて
+  // 「フルパス」と「名前 — Trayce」を互いに上書きし合い、一瞬ちらつく。
+  app
     .state::<Registry>()
     .set_context(&label, active_tab_label, tab_count, panes, tabs);
-  if let (Some(win), Some(path)) = (app.get_webview_window(&label), active_path) {
-    let _ = win.set_title(&path);
-  }
 }
 
 /// 別WebViewである俯瞰オーバーレイから読めるよう、現在タブのトレイを窓レジストリへ同期する。

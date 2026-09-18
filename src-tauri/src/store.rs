@@ -577,7 +577,11 @@ pub struct PathKind {
 ///
 /// お気に入り・履歴・トレイは、消えた場所を指したまま残る。掴んでから
 /// 「開けません」と言われるより、先に灰色で示すほうが親切。
-#[tauri::command]
+///
+/// 1件につき `is_dir` と `is_file` で最大2回 stat する。★や履歴が
+/// 切断されたネットワークドライブを指していると1件で数秒かかるため、
+/// `(async)` でメインスレッドから外すことがとりわけ重要になる。
+#[tauri::command(async)]
 pub fn path_kinds(paths: Vec<String>) -> Vec<PathKind> {
   paths.iter().map(|p| path_kind(Path::new(p))).collect()
 }

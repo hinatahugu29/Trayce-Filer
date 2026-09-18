@@ -93,7 +93,7 @@ pub fn home_dir() -> String {
 ///
 /// Windows にはドライブをまとめて列挙する標準APIが std に無いので、
 /// A〜Z を総当りして存在するものを拾う。26回の stat なので実用上は充分速い。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn drives() -> Vec<String> {
   (b'A'..=b'Z')
     .map(|c| format!("{}:\\", c as char))
@@ -106,7 +106,7 @@ pub fn drives() -> Vec<String> {
 /// ツリーの展開に使う。`list_dir` でも同じことはできるが、
 /// ファイルが数万ある場所を展開した時に、使わないファイル分まで
 /// 詰めて IPC で送ることになるので分けている。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_subdirs(path: String, show_hidden: Option<bool>) -> Result<Vec<Entry>, String> {
   let show_hidden = show_hidden.unwrap_or(false);
   let read = std::fs::read_dir(&path).map_err(|e| format!("{path} を読めません: {e}"))?;
@@ -124,7 +124,16 @@ pub fn list_subdirs(path: String, show_hidden: Option<bool>) -> Result<Vec<Entry
 }
 
 /// ディレクトリを1階層読む。
-#[tauri::command]
+/// フォルダの中身を読む。
+///
+/// `(async)` はディスクに触るコマンドすべてに付けてある。これが無いと Tauri は
+/// コマンドをメインスレッドで走らせるため、読んでいる間そのプロセスの**全部の窓**が
+/// 止まる。Trayceは1プロセスで複数の窓を持つので、片方の窓が遅いドライブを読むと
+/// もう片方のキー操作まで効かなくなる。
+///
+/// ローカルSSDなら3万件で40ms程度だが、止まる時間がパスの速さで決まること自体が問題で、
+/// ネットワークドライブや切断されたUSBでは秒単位になる。
+#[tauri::command(async)]
 pub fn list_dir(path: String, sort: Option<SortSpec>) -> Result<DirListing, String> {
   let sort = sort.unwrap_or_default();
   let dir = Path::new(&path);
@@ -259,7 +268,7 @@ pub enum ConflictPolicy {
 
 /// 転送先で名前が衝突する項目の名前。転送前に選択肢を出すために使う。
 /// 同じ場所への転送（何もしない）は衝突に数えない。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn transfer_conflicts(paths: Vec<String>, dest: String) -> Vec<String> {
   let dest_dir = Path::new(&dest);
   paths
@@ -267,7 +276,9 @@ pub fn transfer_conflicts(paths: Vec<String>, dest: String) -> Vec<String> {
     .filter_map(|p| {
       let src = Path::new(p);
       let name = src.file_name()?;
-      if src.parent() == Some(dest_dir) {
+      // 転送側と同じ判定にしておく。ここだけ文字列で比べると、実際には
+      // 何も起きない同じ場所への転送に、衝突の確認だけが出る。
+      if src.parent().is_some_and(|parent| is_same_entry(parent, dest_dir)) {
         return None;
       }
       dest_dir.join(name).exists().then(|| name.to_string_lossy().to_string())
@@ -279,6 +290,9 @@ pub fn transfer_conflicts(paths: Vec<String>, dest: String) -> Vec<String> {
 pub struct Progress {
   pub bytes_done: u64,
   pub files_done: u64,
+  /// 中へ降りずに飛ばしたジャンクション・シンボリックリンクの数。
+  /// 黙って減らすと「コピーしたはずのものが無い」になるので、呼び出し側が知らせる。
+  pub links_skipped: u64,
 }
 
 /// 進捗付きで転送する。`transfer` モジュールから呼ぶ入口。
@@ -374,7 +388,7 @@ fn transfer_with_policy(
     return Err(format!("{dest} はディレクトリではありません"));
   }
 
-  let mut progress = Progress { bytes_done: 0, files_done: 0 };
+  let mut progress = Progress { bytes_done: 0, files_done: 0, links_skipped: 0 };
   let mut done = Vec::new();
 
   for p in paths {
@@ -387,11 +401,13 @@ fn transfer_with_policy(
       return Err(format!("{p} のファイル名を取得できません"));
     };
 
-    // 自分自身の中へ入れようとした場合は何もしない（無限再帰やデータ消失を避ける）。
-    if src.parent() == Some(dest_dir) {
+    // 同じフォルダへ落とした場合は何もしない。つづり違いで素通りすると、
+    // 上書きを選んだ時に「既存」として自分自身をゴミ箱へ送ってしまう。
+    if src.parent().is_some_and(|parent| is_same_entry(parent, dest_dir)) {
       continue;
     }
-    if src.is_dir() && dest_dir.starts_with(&src) {
+    // 自分自身の中へ入れようとした場合も止める（無限再帰やデータ消失を避ける）。
+    if src.is_dir() && is_inside(dest_dir, &src) {
       return Err(format!("{p} を自身の下へは移動できません"));
     }
 
@@ -405,7 +421,7 @@ fn transfer_with_policy(
         ConflictPolicy::Skip => continue,
         ConflictPolicy::Overwrite => {
           // 既存が転送元を含んでいると、既存を退かした時点で転送元ごと消える。
-          if src.starts_with(&direct) {
+          if is_inside(&src, &direct) {
             return Err(format!("{p} を含む {} は上書きできません", direct.display()));
           }
           discard(&direct)?;
@@ -605,7 +621,22 @@ fn copy_dir_all(
     }
     let entry = entry?;
     let target = dst.join(entry.file_name());
-    let completed = if entry.file_type()?.is_dir() {
+    let kind = entry.file_type()?;
+
+    // リンクの中へは降りない。
+    //
+    // ジャンクションは中身ではなく別の場所への指し示しで、祖先を指していることがある。
+    // Windowsの利用者プロファイルには実際にそういうものが置かれている
+    // （`AppData\Local\Application Data` は `AppData\Local` 自身を指す）。
+    // 辿ると自分の中を無限に降り続け、スタックを使い果たしてプロセスごと落ちる。
+    // 落ちれば開いていた窓もセッションも道連れになる。
+    if kind.is_symlink() {
+      progress.links_skipped += 1;
+      on_progress(progress, &entry.path().to_string_lossy());
+      continue;
+    }
+
+    let completed = if kind.is_dir() {
       copy_dir_all(&entry.path(), &target, cancel, progress, on_progress)?
     } else {
       copy_file(&entry.path(), &target, cancel, progress, on_progress)?
@@ -732,7 +763,7 @@ mod os_clipboard {
 }
 
 /// 新しいフォルダを作る。名前が衝突したら退避名にする。戻り値は実際に作られたパス。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_folder(app: tauri::AppHandle, parent: String, name: String) -> Result<String, String> {
   use tauri::Manager;
 
@@ -756,7 +787,7 @@ fn create_folder_impl(parent: &str, name: &str) -> Result<PathBuf, String> {
 }
 
 /// 空のファイルを作る。名前が衝突したら退避名にする。戻り値は実際に作られたパス。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_file(app: tauri::AppHandle, parent: String, name: String) -> Result<String, String> {
   use tauri::Manager;
 
@@ -804,7 +835,7 @@ pub fn open_terminal(path: String) -> Result<(), String> {
 }
 
 /// 名前を変える。戻り値は変更後のパス。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_entry(app: tauri::AppHandle, path: String, new_name: String) -> Result<String, String> {
   use tauri::Manager;
 
@@ -890,7 +921,7 @@ const IMAGE_PREVIEW_CAP: u64 = 20 * 1024 * 1024;
 /// 実際の画像デコードはフロント側（`<img>` + `convertFileSrc`）に任せ、
 /// ここでは「見せてよいか」の判断とテキストの読み取りだけを行う。
 /// Rust 側で画像デコードライブラリを持ち込むと依存が重くなるため避けた。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preview_entry(path: String) -> Preview {
   let p = Path::new(&path);
   let ext = p
@@ -959,7 +990,7 @@ fn utf8_head_lossy(bytes: &[u8], truncated: bool) -> String {
 ///
 /// 入力を「確定している親」と「打ちかけの断片」に割り、
 /// 親の直下から断片で始まるものを返す。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn complete_path(input: String, show_hidden: Option<bool>) -> Vec<String> {
   let show_hidden = show_hidden.unwrap_or(false);
   let (parent, fragment) = split_for_completion(&input);
@@ -995,6 +1026,22 @@ fn split_for_completion(input: &str) -> (String, String) {
     // 区切りが先頭付近（`C:\` など）の場合、親は区切りまで含める必要がある。
     Some(i) => (input[..=i].to_string(), input[i + 1..].to_string()),
     None => (input.to_string(), String::new()),
+  }
+}
+
+/// `inner` が `outer` と同じか、その下にあるか。
+///
+/// パス文字列のままでは判定できない。Windowsは大文字小文字を区別しないのに、
+/// `Path::starts_with` が無視するのはドライブ文字だけで、フォルダ名は区別する。
+/// 実測: `c:\work\sub`.starts_with(`C:\Work`) は false になる。
+/// アドレスバーには好きなつづりを打てるので、同じ場所を別のつづりで開けてしまう。
+///
+/// ジャンクション越しに同じ場所へ届く経路もあるため、実体まで解決してから比べる。
+/// 解決できない場合だけ文字列の比較へ落とす（弾き漏らすより弾きすぎる方が安全）。
+fn is_inside(inner: &Path, outer: &Path) -> bool {
+  match (inner.canonicalize(), outer.canonicalize()) {
+    (Ok(inner), Ok(outer)) => inner.starts_with(&outer),
+    _ => inner.starts_with(outer),
   }
 }
 
@@ -1332,6 +1379,33 @@ mod tests {
 
     assert!(done.is_empty());
     assert!(!root.join("a (2).txt").exists());
+    let _ = std::fs::remove_dir_all(&root);
+  }
+
+  /// つづり違いでも同じ場所として扱う。
+  ///
+  /// アドレスバーには好きなつづりを打てるので、片方のペインが `Work`、
+  /// もう片方が `work` を開いている状態は普通に作れる。`Path::starts_with` は
+  /// フォルダ名の大文字小文字を区別するため、そこを素通りしていた。
+  #[test]
+  fn guards_still_hold_when_the_spelling_differs() {
+    let root = scratch("case_guard");
+    let outer = root.join("Work");
+    let inner = outer.join("Sub");
+    std::fs::create_dir_all(&inner).unwrap();
+    std::fs::write(outer.join("a.txt"), b"x").unwrap();
+
+    // 自身の下へは、つづりが違っても入れられない。
+    let lower_inner = s(&root.join("work").join("sub"));
+    assert!(accept_dropped(vec![s(&outer)], lower_inner, true).is_err());
+    assert!(outer.exists(), "拒否したので元は無傷であるべき");
+
+    // 同じフォルダへ落としたのなら、つづりが違っても複製しない。
+    let lower_outer = s(&root.join("work"));
+    let done = accept_dropped(vec![s(&outer.join("a.txt"))], lower_outer, false).unwrap();
+    assert!(done.is_empty());
+    assert!(!outer.join("a (2).txt").exists());
+
     let _ = std::fs::remove_dir_all(&root);
   }
 
