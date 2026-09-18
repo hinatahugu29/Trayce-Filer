@@ -556,8 +556,6 @@ export const windowInitialPath = (label: string) =>
 
 export const registerWindow = (label: string, path: string) =>
   invoke<void>('register_window', { label, path })
-export const setWindowPath = (label: string, path: string) =>
-  invoke<void>('set_window_path', { label, path })
 export const setWindowContext = (
   label: string,
   activeTabLabel: string,
