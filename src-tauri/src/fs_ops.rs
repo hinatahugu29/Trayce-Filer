@@ -93,7 +93,7 @@ pub fn home_dir() -> String {
 ///
 /// Windows にはドライブをまとめて列挙する標準APIが std に無いので、
 /// A〜Z を総当りして存在するものを拾う。26回の stat なので実用上は充分速い。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn drives() -> Vec<String> {
   (b'A'..=b'Z')
     .map(|c| format!("{}:\\", c as char))
@@ -106,7 +106,7 @@ pub fn drives() -> Vec<String> {
 /// ツリーの展開に使う。`list_dir` でも同じことはできるが、
 /// ファイルが数万ある場所を展開した時に、使わないファイル分まで
 /// 詰めて IPC で送ることになるので分けている。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_subdirs(path: String, show_hidden: Option<bool>) -> Result<Vec<Entry>, String> {
   let show_hidden = show_hidden.unwrap_or(false);
   let read = std::fs::read_dir(&path).map_err(|e| format!("{path} を読めません: {e}"))?;
@@ -124,7 +124,16 @@ pub fn list_subdirs(path: String, show_hidden: Option<bool>) -> Result<Vec<Entry
 }
 
 /// ディレクトリを1階層読む。
-#[tauri::command]
+/// フォルダの中身を読む。
+///
+/// `(async)` はディスクに触るコマンドすべてに付けてある。これが無いと Tauri は
+/// コマンドをメインスレッドで走らせるため、読んでいる間そのプロセスの**全部の窓**が
+/// 止まる。Trayceは1プロセスで複数の窓を持つので、片方の窓が遅いドライブを読むと
+/// もう片方のキー操作まで効かなくなる。
+///
+/// ローカルSSDなら3万件で40ms程度だが、止まる時間がパスの速さで決まること自体が問題で、
+/// ネットワークドライブや切断されたUSBでは秒単位になる。
+#[tauri::command(async)]
 pub fn list_dir(path: String, sort: Option<SortSpec>) -> Result<DirListing, String> {
   let sort = sort.unwrap_or_default();
   let dir = Path::new(&path);
@@ -259,7 +268,7 @@ pub enum ConflictPolicy {
 
 /// 転送先で名前が衝突する項目の名前。転送前に選択肢を出すために使う。
 /// 同じ場所への転送（何もしない）は衝突に数えない。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn transfer_conflicts(paths: Vec<String>, dest: String) -> Vec<String> {
   let dest_dir = Path::new(&dest);
   paths
@@ -732,7 +741,7 @@ mod os_clipboard {
 }
 
 /// 新しいフォルダを作る。名前が衝突したら退避名にする。戻り値は実際に作られたパス。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_folder(app: tauri::AppHandle, parent: String, name: String) -> Result<String, String> {
   use tauri::Manager;
 
@@ -756,7 +765,7 @@ fn create_folder_impl(parent: &str, name: &str) -> Result<PathBuf, String> {
 }
 
 /// 空のファイルを作る。名前が衝突したら退避名にする。戻り値は実際に作られたパス。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_file(app: tauri::AppHandle, parent: String, name: String) -> Result<String, String> {
   use tauri::Manager;
 
@@ -804,7 +813,7 @@ pub fn open_terminal(path: String) -> Result<(), String> {
 }
 
 /// 名前を変える。戻り値は変更後のパス。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rename_entry(app: tauri::AppHandle, path: String, new_name: String) -> Result<String, String> {
   use tauri::Manager;
 
@@ -890,7 +899,7 @@ const IMAGE_PREVIEW_CAP: u64 = 20 * 1024 * 1024;
 /// 実際の画像デコードはフロント側（`<img>` + `convertFileSrc`）に任せ、
 /// ここでは「見せてよいか」の判断とテキストの読み取りだけを行う。
 /// Rust 側で画像デコードライブラリを持ち込むと依存が重くなるため避けた。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preview_entry(path: String) -> Preview {
   let p = Path::new(&path);
   let ext = p
@@ -959,7 +968,7 @@ fn utf8_head_lossy(bytes: &[u8], truncated: bool) -> String {
 ///
 /// 入力を「確定している親」と「打ちかけの断片」に割り、
 /// 親の直下から断片で始まるものを返す。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn complete_path(input: String, show_hidden: Option<bool>) -> Vec<String> {
   let show_hidden = show_hidden.unwrap_or(false);
   let (parent, fragment) = split_for_completion(&input);
