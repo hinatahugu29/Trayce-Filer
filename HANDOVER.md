@@ -449,3 +449,7 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 - `ab50d04` — `perf: only refresh the sidebar list that is actually showing`
 - `b0d19a6` — `fix: carry a tab's work state across a switch`
 - `fbb315b` — `perf: fold the things that do not change once`
+- `d119698` — `fix: discard a listing that arrives after a newer one`
+- `65ff97f` — `perf: stop restating the whole history on every move`
+- `3ee359e` — `fix: recognise the same folder when it is spelled differently`
+- `9d9f8bc` — `fix: skip junctions instead of failing the whole copy on one`
