@@ -412,7 +412,7 @@
       activeTrayId: tray.id,
     }
     tabs = [...tabs, tab]
-    activeTabId = tab.id
+    goToTab(tab.id)
   }
 
   let closedTabs: TabState[] = []
@@ -436,7 +436,7 @@
     const [restored, ...rest] = closedTabs
     closedTabs = rest
     tabs = [...tabs, restored]
-    activeTabId = restored.id
+    goToTab(restored.id)
   }
 
   function handleTabDragStart(index: number, ev: DragEvent) {
@@ -466,7 +466,31 @@
   function cycleTab(delta: number) {
     if (tabs.length <= 1) return
     const idx = tabs.findIndex((t) => t.id === activeTabId)
-    activeTabId = tabs[(idx + delta + tabs.length) % tabs.length].id
+    goToTab(tabs[(idx + delta + tabs.length) % tabs.length].id)
+  }
+
+  /**
+   * 別のタブへ移る。
+   *
+   * 表に出ていないタブのペインは描かれないため、移った時点で破棄される。
+   * 場所ごとの作業状態（スクロール位置・選択・カーソル・絞り込み・並べ替え）は
+   * ペインの中にあるので、出て行く前にここで引き取っておかないと、戻った時に
+   * 初めてその場所を開いたのと同じ状態になる。
+   *
+   * 「戻りを無料にする」はタブをまたいでも成り立つべき約束で、タブが
+   * 一番大きな戻り単位である以上、そこだけ有料なのは筋が通らない。
+   */
+  function goToTab(id: number) {
+    if (id === activeTabId) return
+    const leaving = activeTab
+    if (leaving) {
+      for (const pane of leaving.panes) {
+        if (pane.ref && 'capturePathStates' in pane.ref) {
+          pane.pathStates = pane.ref.capturePathStates()
+        }
+      }
+    }
+    activeTabId = id
   }
 
   function splitPane(
@@ -880,7 +904,7 @@
     })
     unlistenActivateTab = await listen<number>(api.ACTIVATE_TAB_REQUEST, ({ payload }) => {
       if (!tabs.some((tab) => tab.id === payload)) return
-      activeTabId = payload
+      goToTab(payload)
       hoveredPaneId = null
       tabs = tabs
     })
@@ -925,7 +949,7 @@
           on:dragstart={(ev) => handleTabDragStart(idx, ev)}
           on:dragover={(ev) => handleTabDragOver(idx, ev)}
           on:drop={(ev) => handleTabDrop(idx, ev)}
-          on:click={() => (activeTabId = tab.id)}
+          on:click={() => goToTab(tab.id)}
         >
           <span class="tab-label">{tabLabel(tab)}</span>
           <span
