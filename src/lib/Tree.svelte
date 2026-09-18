@@ -7,6 +7,7 @@
   /** ペインが今開いている場所。ツリーはここまで自動で開き、位置を示す。 */
   export let currentPath: string
   export let onNavigate: (path: string) => void
+  export let onOpenBeside: (path: string) => void = () => {}
   export let showHidden = false
 
   let roots: string[] = []
@@ -27,6 +28,7 @@
       {currentPath}
       {autoOpen}
       {onNavigate}
+      {onOpenBeside}
       {showHidden}
     />
   {/each}

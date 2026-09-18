@@ -61,6 +61,7 @@ results available as normal copy/move/preview/tray sources.
 - [x] Favorites drop round (phase A) — register folders by dragging them onto the ★ panel, from a listing, another pane, or Explorer; add-only backend command, and one notification path that keeps every open ★ panel in step
 - [x] Favorites drop round (phase B) — files in ★ as a light launcher: kind-derived row verbs, search-root reuse filtered to folders, and jumps from a file favourite kept out of the movement tally
 - [x] Double-launch fix — Enter on a clicked row ran the row's own handler and then the list's, so an executable really started twice
+- [x] Middle-click round — a place opened beside instead of navigated to, on every surface that lists places
 - [ ] **Measurement window (next action)** — use the app normally for 1–2 weeks, then read Settings → 移動の集計 and decide the next investment from the data rather than from argument. Thresholds are printed next to the numbers. **The tally has not started yet**: `state.json` carried no `navTally` as of 2026-09-16, so the window begins at first use of a build from `caaa30f` onwards
 - [ ] Deferred until the measurement says so — an overview/teleport surface for Trayce, tray cycling (next/previous waypoint on one key), tray folder rows as drop targets
 - [ ] Search follow-up, deferred by the owner on 2026-09-16 — a search pane split from a search pane builds a second index of the same roots (accepted: duplicating is the user's own choice), and files created after the scan need a reload to appear. Both documented in `SPEC.md` §4.4; revisit only if real use makes either painful
@@ -325,6 +326,20 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
   It had been there since the list was written and stayed invisible because almost nothing shows it. Opening a document twice just re-focuses the same window; navigating into a folder twice lands in the same place. Only a program that can run in parallel makes the second call visible, which is why the report arrived as a hunch about executables rather than as a keyboard bug. Arrow-then-Enter never reproduced it either, since focus stays on the container.
 
   Deleting the row handlers is the obvious fix and costs two a11y warnings (this repo holds at zero), so the row keeps its handler and stops propagation **for `Enter` only**. Blanket `|stopPropagation` would strand the arrows, Home/End and the single-key sorts whenever focus sat on a row.
+
+## The middle-click round
+
+- 2026-09-18: Asked whether the middle button was free (it was — the only `button` checks in the tree were three "left only" guards) and weighed new pane against new window, leaning to pane. Pane is right, for reasons better than the lean.
+
+  The browser connotation is middle-click = new **tab**, and what a tab is for is being cheap to make and cheap to throw away. In Trayce that is the pane, not the window: a window carries a position and needs `Alt+F4`. Trayce's own tabs are the wrong target too, because §4.1 makes a tab a unit of work that **hides** what is in it, and the point of opening a second place is to see both.
+
+  The middle button is the scroll wheel, so fingers slip on it. That is the same argument that kept destructive verbs off the window layer when `Alt+Q`/`Alt+W` went in: a stray pane costs one `W`, a stray window sits there with a position.
+
+  It also is not a new verb. "Open beside" already existed as `splitPane`, reachable from the search pane's context menu and from pinned-pane redirection; middle-click just gives it the shortest path from the pointer. Every surface routes to the `onSplit` prop `Pane` already had.
+
+  Two details the browser does not hand you. Windows starts autoscroll on middle **mousedown**, so that has to be prevented separately from the `auxclick` that does the work. And `auxclick` fires for every non-primary button, so right-click has to be filtered out by number or the context menu opens a pane alongside itself. Both live in `middleclick.ts` with tests, rather than being repeated across seven components.
+
+  Adding handlers to the tray row made svelte demand a tabindex for its `option` role. Harmless here — unlike the file list, the tray's container handles no Enter, so a focusable row cannot double-fire the way the list just did.
 
 ## Commit log
 

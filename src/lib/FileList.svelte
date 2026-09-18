@@ -9,6 +9,7 @@
   import { tick } from 'svelte'
   import { startDrag } from '@crabnebula/tauri-plugin-drag'
   import { fileIcon, formatSize, formatModified, joinPath, pathIdentity } from './api'
+  import { armMiddleClick, onMiddleClick } from './middleclick'
   import * as prefetch from './prefetch'
   import type { Entry, SortKey, SortSpec } from './api'
 
@@ -19,6 +20,8 @@
   export let dragIcon = ''
   export let sort: SortSpec
   export let onOpen: (path: string) => void
+  /** 中クリック用。いまのペインを動かさず、その場所を隣のペインで開く。 */
+  export let onOpenBeside: (path: string) => void = () => {}
   /** ファイルを既定のアプリで開く。パスは組み立て済みのものを渡す。 */
   export let onLaunch: (entry: Entry, path: string) => void = () => {}
   export let onSort: (key: SortKey) => void = () => {}
@@ -679,6 +682,8 @@
             on:click={(e) => onRowClick(index, row, e)}
             on:dblclick={() => onOpen(row.path)}
             on:keydown={onRowEnter(() => onOpen(row.path))}
+            on:mousedown={armMiddleClick}
+            on:auxclick={onMiddleClick(() => onOpenBeside(row.path))}
           >
             <span class="col c-name"><span class="icon">↰</span><span class="name">..</span></span>
           </div>
@@ -706,6 +711,8 @@
             on:click={(e) => onRowClick(index, row, e)}
             on:dblclick={() => activate(row)}
             on:keydown={onRowEnter(() => activate(row))}
+            on:mousedown={entry.is_dir ? armMiddleClick : null}
+            on:auxclick={entry.is_dir ? onMiddleClick(() => onOpenBeside(row.path)) : null}
             on:contextmenu={(e) => onRowContext(index, row, e)}
             on:pointerdown={(e) => onPointerDown(row, e)}
           >

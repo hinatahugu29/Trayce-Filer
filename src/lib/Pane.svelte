@@ -1214,6 +1214,7 @@
     bind:this={pathBar}
     path={listing?.path ?? '…'}
     onNavigate={open}
+    onOpenBeside={onSplit}
     showHidden={sort.showHidden}
   >
     <div class="actions">
@@ -1324,7 +1325,8 @@
           onClose={() => closeSidebarSection('primary')}
           onTabChange={sidebarChanged}
           currentPath={listing?.path ?? ''}
-          onNavigate={open}
+onNavigate={open}
+          onOpenBeside={onSplit}
           onNavigateUncounted={goToUncounted}
           showHidden={sort.showHidden}
           {trayItems}
@@ -1350,6 +1352,7 @@
               onTabChange={sidebarChanged}
               currentPath={listing?.path ?? ''}
               onNavigate={open}
+              onOpenBeside={onSplit}
               onNavigateUncounted={goToUncounted}
               showHidden={sort.showHidden}
               {trayItems}
@@ -1428,6 +1431,7 @@
         {dragIcon}
         {sort}
         onOpen={open}
+        onOpenBeside={onSplit}
         onLaunch={launch}
         onSort={changeSort}
         onSelectionChange={(paths) => (selection = paths)}

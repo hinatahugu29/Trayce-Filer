@@ -2,10 +2,13 @@
   import PathRow from './PathRow.svelte'
   import { openPath } from '@tauri-apps/plugin-opener'
   import { splitPath } from './api'
+  import { armMiddleClick, onMiddleClick } from './middleclick'
   import * as api from './api'
 
   export let currentPath: string
   export let onNavigate: (path: string) => void
+  /** 中クリック用。いまのペインを動かさず、その場所を隣のペインで開く。 */
+  export let onOpenBeside: (path: string) => void = () => {}
   /** ファイル行の → 用。この機能が生んだ跳躍で移動の集計を歪ませない。 */
   export let onNavigateUncounted: (path: string) => void = (path) => onNavigate(path)
   /** 登録内容が変わった時に、他のペインの★表示も直すため親へ知らせる。 */
@@ -124,6 +127,8 @@
       on:pointerdown={(e) => onPointerDown(i, e)}
       on:pointerup={(e) => onPointerUp(i, e)}
       on:keydown={(e) => e.key === 'Enter' && activate(path, i)}
+      on:mousedown={isFile ? null : armMiddleClick}
+      on:auxclick={isFile ? null : onMiddleClick(() => onOpenBeside(path))}
     >
       <PathRow
         {path}

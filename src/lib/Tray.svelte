@@ -2,9 +2,12 @@
   import { onMount } from 'svelte'
   import { splitPath } from './api'
   import * as api from './api'
+  import { armMiddleClick, onMiddleClick } from './middleclick'
 
   export let items: string[] = []
   export let onNavigate: (path: string) => void
+  /** 中クリック用。いまのペインを動かさず、その場所を隣のペインで開く。 */
+  export let onOpenBeside: (path: string) => void = () => {}
   export let onRemove: (path: string) => void = () => {}
   export let onRemoveMany: (paths: string[]) => void = () => {}
   export let onClear: () => void = () => {}
@@ -161,7 +164,10 @@
         class:dir={isDir}
         title={path}
         role="option"
+        tabindex="-1"
         aria-selected={selectedKeys.has(api.pathIdentity(path))}
+        on:mousedown={isDir ? armMiddleClick : null}
+        on:auxclick={isDir ? onMiddleClick(() => onOpenBeside(path)) : null}
       >
         {#if isDir}
           <!-- フォルダだけが持つ動詞。選択とは当たり判定を分けるので、部分選択はそのまま使える。 -->

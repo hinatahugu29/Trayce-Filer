@@ -9,6 +9,8 @@
 
   export let currentPath: string
   export let onNavigate: (path: string) => void
+  /** 中クリック用。いまのペインを動かさず、その場所を隣のペインで開く。 */
+  export let onOpenBeside: (path: string) => void = () => {}
   /** 移動の集計に数えない移動。既定では普通の移動と同じ。 */
   export let onNavigateUncounted: (path: string) => void = (path) => onNavigate(path)
   /** 一覧の設定をツリーにも反映させる。 */
@@ -121,13 +123,14 @@
 
   <div class="body">
     {#if tab === 'tree'}
-      <Tree {currentPath} {onNavigate} {showHidden} />
+      <Tree {currentPath} {onNavigate} {onOpenBeside} {showHidden} />
     {:else if tab === 'favorites'}
       <Favorites
         items={favorites}
         kinds={favoriteKinds}
         {currentPath}
         {onNavigate}
+        {onOpenBeside}
         {onNavigateUncounted}
         onChanged={api.favoritesChanged}
       />
@@ -137,12 +140,14 @@
         missing={historyExist}
         {currentPath}
         {onNavigate}
+        {onOpenBeside}
         onChanged={refresh}
       />
     {:else}
       <Tray
         items={trayItems}
         {onNavigate}
+        {onOpenBeside}
         onRemove={onTrayRemove}
         onRemoveMany={onTrayRemoveMany}
         onClear={onTrayClear}
