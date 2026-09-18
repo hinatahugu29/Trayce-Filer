@@ -51,28 +51,49 @@
    * お気に入りも履歴も、消えたフォルダを指したまま残る。
    * 掴んでから「開けません」と言われるより、先に灰色で示す方が親切。
    */
-  export async function refresh() {
+  /**
+   * ★の一覧。見出しに件数を出すので、開いていなくても持っておく。
+   *
+   * 種別（実在・ファイルかフォルダか）は一覧を描く時にしか要らない。
+   * 1件につき最大2回 stat するため、★が切断されたネットワークドライブを
+   * 指していると、見えてもいない欄のためにそこへ問い合わせに行くことになる。
+   */
+  async function refreshFavorites() {
     favorites = await api.listFavorites()
-    history = await api.listHistory()
-    const [favoriteKindList, historyKinds] = await Promise.all([
-      api.pathKinds(favorites),
-      api.pathKinds(history.map((h) => h.path)),
-    ])
-    // ★はファイルも持てるので、種別をそのまま渡して行の動詞を出し分けさせる。
-    favoriteKinds = favoriteKindList
-    // 履歴は場所だけを並べる欄なので、ファイルに置き換わっていたら「無い」と同じに扱う。
-    historyExist = historyKinds.map((kind) => kind.isDir)
+    favoriteKinds = tab === 'favorites' ? await api.pathKinds(favorites) : []
   }
 
-  // 表示中のタブが変わった時と、場所が変わった時に取り直す。
-  // 履歴は移動のたびに増えるので、開きっぱなしでも古びないようにする。
-  $: if (tab && currentPath) refresh()
+  async function refreshHistory() {
+    history = await api.listHistory()
+    const kinds = await api.pathKinds(history.map((h) => h.path))
+    // 履歴は場所だけを並べる欄なので、ファイルに置き換わっていたら「無い」と同じに扱う。
+    historyExist = kinds.map((kind) => kind.isDir)
+  }
+
+  /** 外から促された時の入口。表示している欄のぶんだけ取り直す。 */
+  export async function refresh() {
+    if (tab === 'history') await refreshHistory()
+    else if (tab === 'favorites') await refreshFavorites()
+  }
+
+  /**
+   * 取り直す条件を欄ごとに分ける。
+   *
+   * 以前はどの欄を開いていても、移動のたびに★と履歴の両方を取り直していた。
+   * サイドバーはペインごとに1つあり、上下分割ではさらに増えるので、
+   * 3ペイン構成では `Q` 1回で10件以上のIPCと数十回の stat が走っていた。
+   * しかも既定の欄はツリーで、★も履歴も描かれてすらいない。
+   */
+  // ★は移動では変わらない。変わるのは登録・解除の時だけで、それは下で拾う。
+  $: if (tab === 'favorites') refreshFavorites()
+  // 履歴は移動のたびに増えるので、開いている間は場所に追従させる。
+  $: if (tab === 'history' && currentPath) refreshHistory()
 
   // お気に入りは全ペイン共有なので、どこで変わっても取り直す。自分で登録した時しか
   // 直さないと、隣のペインと上下分割の下段が古いまま残る。
   onMount(() => {
-    refresh()
-    return api.onFavoritesChanged(refresh)
+    refreshFavorites()
+    return api.onFavoritesChanged(refreshFavorites)
   })
 </script>
 
