@@ -60,6 +60,7 @@ results available as normal copy/move/preview/tray sources.
 - [x] Left-hand keyboard round — single-key sorting (`A`/`S`/`X`/`Z`), direction-only reverse (`D`), sort every pane at once (`Shift+`), expand/collapse all (`E`), collect to tray (`C`), hidden files (`R`); search pane made honest about what stopping discards and wired to the same keys
 - [x] Favorites drop round (phase A) — register folders by dragging them onto the ★ panel, from a listing, another pane, or Explorer; add-only backend command, and one notification path that keeps every open ★ panel in step
 - [x] Favorites drop round (phase B) — files in ★ as a light launcher: kind-derived row verbs, search-root reuse filtered to folders, and jumps from a file favourite kept out of the movement tally
+- [x] Double-launch fix — Enter on a clicked row ran the row's own handler and then the list's, so an executable really started twice
 - [ ] **Measurement window (next action)** — use the app normally for 1–2 weeks, then read Settings → 移動の集計 and decide the next investment from the data rather than from argument. Thresholds are printed next to the numbers. **The tally has not started yet**: `state.json` carried no `navTally` as of 2026-09-16, so the window begins at first use of a build from `caaa30f` onwards
 - [ ] Deferred until the measurement says so — an overview/teleport surface for Trayce, tray cycling (next/previous waypoint on one key), tray folder rows as drop targets
 - [ ] Search follow-up, deferred by the owner on 2026-09-16 — a search pane split from a search pane builds a second index of the same roots (accepted: duplicating is the user's own choice), and files created after the scan need a reload to appear. Both documented in `SPEC.md` §4.4; revisit only if real use makes either painful
@@ -317,6 +318,14 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 
   Also fixed while passing through: `bind:this={sidebar}` only ever bound the **upper** Sidebar, so `F` left the lower panel of a split sidebar stale. Favourite changes now go through one notifier in `api.ts` that every ★ panel and every path-bar ☆ subscribes to, which covers the new drop path and that old gap at once.
 
+## The double-launch fix
+
+- 2026-09-18: Reported as "AHK seems to run twice on Enter", with a question mark. It did. A row carries `tabindex="-1"`, so clicking one moves focus onto the row itself; `Enter` then fired the row's `on:keydown` **and** bubbled to the list's `onKeyDown`, which opens `rows[cursor]` — the same row, because clicking sets the cursor. Two `activate` calls, one keypress.
+
+  It had been there since the list was written and stayed invisible because almost nothing shows it. Opening a document twice just re-focuses the same window; navigating into a folder twice lands in the same place. Only a program that can run in parallel makes the second call visible, which is why the report arrived as a hunch about executables rather than as a keyboard bug. Arrow-then-Enter never reproduced it either, since focus stays on the container.
+
+  Deleting the row handlers is the obvious fix and costs two a11y warnings (this repo holds at zero), so the row keeps its handler and stops propagation **for `Enter` only**. Blanket `|stopPropagation` would strand the arrows, Home/End and the single-key sorts whenever focus sat on a row.
+
 ## Commit log
 
 - `3f37899` — `docs: add tray workbench implementation handover`
@@ -414,6 +423,7 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 - `5c66281` — `fix: tell the truth when a search is stopped, and match the pane keys`
 - `ce460ba` — `feat: register favourite folders by dropping them`
 - `b1b2c6e` — `feat: keep files in favourites as a light launcher`
+- `713138b` — `fix: launch a file once when Enter is pressed on a clicked row`
 - `cc1b18f` — `feat: let a window hand focus back to the one before it`
 - `62042fc` — `feat: put the window swap under Alt+Q`
 - `3f20dbe` — `feat: flash the edge of the window you land in`
