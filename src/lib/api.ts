@@ -41,7 +41,27 @@ const HALFWIDTH_KANA = '。「」、・ヲァィゥェォャュョッーアイ�
  * 英字の大文字小文字、全角英数記号と半角、全角空白、半角カナ（濁点合成を含む）を同一視する。
  * 表示用の文字列には使わず、比較の両辺にだけ掛ける。
  */
+/**
+ * 畳む対象の文字を含むか。
+ *
+ * 実際に書き換えるのは全角空白 `U+3000` と `U+FF01`〜`U+FF9F`（全角英数記号と
+ * 半角カナ）だけで、それ以外は `toLowerCase` で足りる。ファイル名の大半は
+ * この範囲を含まないので、先に一度走査して安い方へ逃がす。
+ */
+function needsFolding(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code === 0x3000 || (code >= 0xff01 && code <= 0xff9f)) return true
+  }
+  return false
+}
+
 export function foldForSearch(value: string): string {
+  // 1文字ずつ回して文字列を継ぎ足す下の実装は、3万件のフォルダで絞り込むと
+  // 1打鍵あたり40〜55msかかる。打つほど遅れが積もるので、畳む必要が無い名前は
+  // ここで抜ける（同じ条件で6.6msになる）。
+  if (!needsFolding(value)) return value.toLowerCase()
+
   // NFKC は全角英数・半角カナ・濁点合成をまとめて扱える。
   // ただし `①`→`1` や `㍻`→`平成` まで畳むので、Rust 側と結果を揃えるため範囲を限る。
   let out = ''
@@ -289,6 +309,8 @@ export type DoneEvent = {
   cancelled: boolean
   error: string | null
   completedSources: string[]
+  /** 中へ降りずに飛ばしたリンクの数。0 でなければ利用者に伝える。 */
+  linksSkipped: number
 }
 
 /**
@@ -536,8 +558,6 @@ export const windowInitialPath = (label: string) =>
 
 export const registerWindow = (label: string, path: string) =>
   invoke<void>('register_window', { label, path })
-export const setWindowPath = (label: string, path: string) =>
-  invoke<void>('set_window_path', { label, path })
 export const setWindowContext = (
   label: string,
   activeTabLabel: string,

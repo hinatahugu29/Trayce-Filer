@@ -98,6 +98,25 @@ describe('foldForSearch', () => {
   it('全角で打った語が半角カナの名前に一致する', () => {
     expect(foldForSearch('ｶﾀﾛｸﾞ_Draft.PDF').includes(foldForSearch('カタログ＿ＤＲＡＦＴ'))).toBe(true)
   })
+
+  // 畳む必要が無い名前は安い経路へ逃がしている。境界の1文字内側と外側を押さえ、
+  // 逃がす条件が広がって（または狭まって）取りこぼす事故を防ぐ。
+  it('畳む対象の境目でも結果が変わらない', () => {
+    // 内側: 変換される
+    expect(foldForSearch('！')).toBe('!') // U+FF01
+    expect(foldForSearch('ﾟ')).toBe('゜') // U+FF9F
+    expect(foldForSearch('　')).toBe(' ') // U+3000
+    // 外側: そのまま残る
+    expect(foldForSearch('＀')).toBe('＀')
+    expect(foldForSearch('ﾠ')).toBe('ﾠ')
+    expect(foldForSearch('、')).toBe('、') // U+3001
+  })
+
+  it('畳む対象を含まない名前は小文字化だけと一致する', () => {
+    for (const name of ['Report.PDF', '日本語のフォルダ', 'Ünïcode_Ø.txt', '🙂 emoji.png', '']) {
+      expect(foldForSearch(name)).toBe(name.toLowerCase())
+    }
+  })
 })
 
 describe('ancestorsOf', () => {

@@ -269,8 +269,23 @@
   }
 
   $: activeTab = tabs.find((t) => t.id === activeTabId)
-  $: if (ready && activeTab) api.setWindowTray(label, activeTab.trayItems).catch(() => {})
+  $: if (ready && activeTab) syncWindowTray(activeTab.trayItems)
   $: if (ready && activeTab) syncWindowContext()
+
+  /**
+   * 俯瞰UIへ渡すトレイ。中身が変わっていない時は送らない。
+   *
+   * これは `tabs = tabs` のたびに走る。その代入はコード中20箇所以上にあり、
+   * 選択やペインの切り替えでも起きるので、素直に送ると何も変わっていない
+   * 通知でIPCを叩き続けることになる。
+   */
+  let lastTrayKey = ' '
+  function syncWindowTray(items: string[]) {
+    const key = items.join(' ')
+    if (key === lastTrayKey) return
+    lastTrayKey = key
+    api.setWindowTray(label, items).catch(() => {})
+  }
 
   let notes: string[] = []
   function note(message: string) {
@@ -318,7 +333,27 @@
   }
 
   /** 窓のタイトルと俯瞰表示へ、現在タブの全ペインを同期する。 */
+  /**
+   * 俯瞰UIと窓タイトルへ、いまのタブとペインを渡す。
+   *
+   * 1回の操作で何度も呼ばれる。`tabs = tabs` に反応する上の `$:` が走り、
+   * 加えて呼び出し元が明示的にも呼ぶためで、素直に実装すると1操作あたり
+   * 同じ内容を2回以上送ることになる。呼ぶ側を数えて回るより、ここで
+   * 1目盛りに1回へ畳んでから、内容が変わった時だけ送るほうが確実で、
+   * 今後呼び出しが増えても壊れない。
+   */
+  let syncQueued = false
+  let lastContextKey = ''
   function syncWindowContext() {
+    if (syncQueued) return
+    syncQueued = true
+    queueMicrotask(() => {
+      syncQueued = false
+      pushWindowContext()
+    })
+  }
+
+  function pushWindowContext() {
     const tab = activeTab
     if (!tab) return
     const panes: api.WindowPaneInfo[] = tab.panes.map((pane) => ({
@@ -333,7 +368,11 @@
       label: tabLabel(candidate),
       is_active: candidate.id === activeTabId,
     }))
-    api.setWindowContext(label, tabLabel(tab), tabs.length, panes, windowTabs).catch(() => {})
+    const key = JSON.stringify([tabLabel(tab), tabs.length, panes, windowTabs])
+    if (key !== lastContextKey) {
+      lastContextKey = key
+      api.setWindowContext(label, tabLabel(tab), tabs.length, panes, windowTabs).catch(() => {})
+    }
 
     // 窓自身にも現在地を持たせる。
     //
@@ -344,8 +383,14 @@
     const here = active?.ref?.currentPath() || active?.path || ''
     windowHue = here ? pathHue(here) : null
     const name = here ? splitPath(here).tail || here : ''
-    win.setTitle(name ? `${name} — Trayce` : 'Trayce').catch(() => {})
+    const title = name ? `${name} — Trayce` : 'Trayce'
+    if (title !== lastTitle) {
+      lastTitle = title
+      win.setTitle(title).catch(() => {})
+    }
   }
+
+  let lastTitle = ''
 
   /**
    * 現在地から決まる窓の色。
@@ -367,7 +412,7 @@
       activeTrayId: tray.id,
     }
     tabs = [...tabs, tab]
-    activeTabId = tab.id
+    goToTab(tab.id)
   }
 
   let closedTabs: TabState[] = []
@@ -391,7 +436,7 @@
     const [restored, ...rest] = closedTabs
     closedTabs = rest
     tabs = [...tabs, restored]
-    activeTabId = restored.id
+    goToTab(restored.id)
   }
 
   function handleTabDragStart(index: number, ev: DragEvent) {
@@ -421,7 +466,31 @@
   function cycleTab(delta: number) {
     if (tabs.length <= 1) return
     const idx = tabs.findIndex((t) => t.id === activeTabId)
-    activeTabId = tabs[(idx + delta + tabs.length) % tabs.length].id
+    goToTab(tabs[(idx + delta + tabs.length) % tabs.length].id)
+  }
+
+  /**
+   * 別のタブへ移る。
+   *
+   * 表に出ていないタブのペインは描かれないため、移った時点で破棄される。
+   * 場所ごとの作業状態（スクロール位置・選択・カーソル・絞り込み・並べ替え）は
+   * ペインの中にあるので、出て行く前にここで引き取っておかないと、戻った時に
+   * 初めてその場所を開いたのと同じ状態になる。
+   *
+   * 「戻りを無料にする」はタブをまたいでも成り立つべき約束で、タブが
+   * 一番大きな戻り単位である以上、そこだけ有料なのは筋が通らない。
+   */
+  function goToTab(id: number) {
+    if (id === activeTabId) return
+    const leaving = activeTab
+    if (leaving) {
+      for (const pane of leaving.panes) {
+        if (pane.ref && 'capturePathStates' in pane.ref) {
+          pane.pathStates = pane.ref.capturePathStates()
+        }
+      }
+    }
+    activeTabId = id
   }
 
   function splitPane(
@@ -835,7 +904,7 @@
     })
     unlistenActivateTab = await listen<number>(api.ACTIVATE_TAB_REQUEST, ({ payload }) => {
       if (!tabs.some((tab) => tab.id === payload)) return
-      activeTabId = payload
+      goToTab(payload)
       hoveredPaneId = null
       tabs = tabs
     })
@@ -880,7 +949,7 @@
           on:dragstart={(ev) => handleTabDragStart(idx, ev)}
           on:dragover={(ev) => handleTabDragOver(idx, ev)}
           on:drop={(ev) => handleTabDrop(idx, ev)}
-          on:click={() => (activeTabId = tab.id)}
+          on:click={() => goToTab(tab.id)}
         >
           <span class="tab-label">{tabLabel(tab)}</span>
           <span

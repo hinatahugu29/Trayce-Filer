@@ -190,7 +190,6 @@ pub fn run() {
       windows::cycle_window,
       windows::focus_pane,
       windows::focus_tab,
-      windows::set_window_path,
       windows::set_window_context,
       windows::set_window_tray,
       windows::touch_window,

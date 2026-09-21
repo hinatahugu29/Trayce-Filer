@@ -69,6 +69,10 @@ struct CachedEntry {
   view: SearchEntry,
   name_lower: String,
   path_lower: String,
+  /// `ext:` の判定用。名前やパスと同じく、投入時に1度だけ畳んでおく。
+  /// 判定のたびに畳むと、`ext:` を含む検索では1文字打つごとに
+  /// 索引の件数ぶん String を確保することになる。
+  ext_lower: String,
 }
 
 impl CachedEntry {
@@ -81,7 +85,8 @@ impl CachedEntry {
     let modified = metadata.and_then(|value| value.modified().ok()).and_then(|value| value.duration_since(UNIX_EPOCH).ok()).map(|value| value.as_millis()).unwrap_or(0);
     let ext = if is_dir { String::new() } else { path.extension().map(|value| value.to_string_lossy().to_lowercase()).unwrap_or_default() };
     let path = path.to_string_lossy().to_string();
-    Self { name_lower: normalize(&name), path_lower: normalize(&path).replace('/', "\\"), view: SearchEntry { path, name, is_dir, size, modified, ext } }
+    let ext_lower = normalize(&ext);
+    Self { name_lower: normalize(&name), path_lower: normalize(&path).replace('/', "\\"), ext_lower, view: SearchEntry { path, name, is_dir, size, modified, ext } }
   }
 }
 
@@ -419,7 +424,7 @@ impl QueryFilter {
   fn matches(&self, entry: &CachedEntry) -> bool {
     let view = &entry.view;
     let hit = match &self.kind {
-      FilterKind::Ext(exts) => !view.is_dir && exts.iter().any(|ext| *ext == normalize(&view.ext)),
+      FilterKind::Ext(exts) => !view.is_dir && exts.iter().any(|ext| *ext == entry.ext_lower),
       FilterKind::SizeAtLeast(bytes) => !view.is_dir && view.size >= *bytes,
       FilterKind::SizeAtMost(bytes) => !view.is_dir && view.size <= *bytes,
       FilterKind::ModifiedSince(at) => view.modified >= *at,
