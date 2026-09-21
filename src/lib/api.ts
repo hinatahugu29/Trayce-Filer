@@ -449,6 +449,8 @@ export type SavedPaneState = {
   sidebar?: SavedSidebarState
   selectedEntry?: string
   scrollTop?: number
+  /** 幅の重み。未設定は1（均等）。 */
+  weight?: number
   /** 訪れた場所ごとの作業状態。新しいものが先頭の LRU。 */
   pathStates?: SavedPathState[]
 }
@@ -489,6 +491,8 @@ export type LayoutPane = {
   sidebar?: SavedSidebarState
   /** 検索ペインとして展開する時の初期検索語。 */
   query: string
+  /** 幅の重み。未設定は1（均等）。 */
+  weight?: number
 }
 /** 名前を付けて呼び出せるペイン配置。並び順がそのまま Ctrl+1..9 の割り当てになる。 */
 export type Layout = { name: string; panes: LayoutPane[] }

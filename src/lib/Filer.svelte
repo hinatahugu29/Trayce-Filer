@@ -12,6 +12,7 @@
   import LayoutPalette from './LayoutPalette.svelte'
   import { applyLayout, captureLayout } from './layouts'
   import * as navstats from './navstats'
+  import { resizeAt, splitWeight, DIVIDER_PX } from './panesize'
 
   const win = getCurrentWindow()
   const label = win.label
@@ -26,6 +27,8 @@
     sidebar?: api.SavedSidebarState
     /** 転送先として固定し、場所を変えないペイン。 */
     pinned?: boolean
+    /** 幅の重み。区切りを掴んで動かすとここが変わる。未設定は1（均等）。 */
+    weight?: number
     /** 場所ごとの作業状態。復元時に渡し、保存時はペインから引き直す。 */
     pathStates?: api.SavedPathState[]
     ref?: Pane | SearchPane
@@ -188,6 +191,7 @@
         pinned: pane.pinned,
         sidebar: pane.sidebar,
         query: pane.kind === 'search' ? pane.search?.query ?? '' : '',
+        weight: pane.weight,
       })),
       anchor
     )
@@ -219,6 +223,7 @@
       path: snapshot.path,
       pinned: snapshot.pinned ?? false,
       sidebar: snapshot.sidebar,
+      weight: snapshot.weight,
       search:
         snapshot.kind === 'search'
           ? { ...newSearchState(snapshot.path), query: snapshot.query ?? '' }
@@ -493,6 +498,52 @@
     activeTabId = id
   }
 
+  // ---- ペインの幅 ----
+  //
+  // 区切りを掴んで動かす。幅は割合で持つので、ウィンドウの大きさを変えても
+  // 「左を広く」という意図のほうが残る（詳しくは panesize.ts）。
+
+  let panesEl: HTMLDivElement | null = null
+  let resizing: { left: number; startX: number; weights: number[]; totalPx: number } | null = null
+
+  function startResize(left: number, ev: PointerEvent) {
+    const tab = activeTab
+    if (!tab || !panesEl) return
+    ev.preventDefault()
+    ;(ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId)
+    resizing = {
+      left,
+      startX: ev.clientX,
+      // 掴んだ時点の値を基準にする。動くたびに現在値へ足すと、最低幅で止めた後に
+      // 指を戻しても動かない（止めていた間のぶんが失われる）。
+      weights: tab.panes.map((pane) => pane.weight ?? 1),
+      totalPx: panesEl.clientWidth - (tab.panes.length - 1) * DIVIDER_PX,
+    }
+  }
+
+  function moveResize(ev: PointerEvent) {
+    const tab = activeTab
+    if (!resizing || !tab) return
+    const next = resizeAt(resizing.weights, resizing.left, ev.clientX - resizing.startX, resizing.totalPx)
+    tab.panes.forEach((pane, index) => (pane.weight = next[index]))
+    tabs = tabs
+  }
+
+  function endResize(ev: PointerEvent) {
+    if (!resizing) return
+    ;(ev.currentTarget as HTMLElement).releasePointerCapture(ev.pointerId)
+    resizing = null
+  }
+
+  /** 区切りのダブルクリック。触りすぎた時に元へ戻す手段が無いと、掴むのが怖くなる。 */
+  function equalizePanes() {
+    const tab = activeTab
+    if (!tab || tab.panes.length < 2) return
+    tab.panes.forEach((pane) => (pane.weight = 1))
+    tabs = tabs
+    note('ペインの幅を揃えました')
+  }
+
   function splitPane(
     afterId: number,
     path: string,
@@ -516,7 +567,11 @@
           : newSearchState(path)
         : undefined,
     }
+    // 生まれるペインぶんは、割られたペインだけで負担する。全体を配り直すと、
+    // 幅を決めておいた隣のペインまで動く。
+    const shared = splitWeight(tab.panes.map((pane) => pane.weight ?? 1), idx)
     tab.panes = [...tab.panes.slice(0, idx + 1), created, ...tab.panes.slice(idx + 1)]
+    tab.panes.forEach((pane, index) => (pane.weight = shared[index]))
     tab.activeId = created.id
     tabs = tabs // ネストした更新を描画に反映させる
   }
@@ -780,6 +835,7 @@
         pinned: p.pinned || undefined,
         search: p.search,
         sidebar: p.sidebar,
+        weight: p.weight,
         // 通常ペインだけが場所ごとの状態を持つ。取れない時は復元時の値を落とさず残す。
         pathStates:
           p.ref && 'capturePathStates' in p.ref ? p.ref.capturePathStates() : p.pathStates,
@@ -827,6 +883,7 @@
             pinned: p.pinned ?? false,
             search: p.search,
             sidebar: p.sidebar,
+            weight: p.weight,
             pathStates: p.pathStates,
           }))
           if (panes.length === 0) {
@@ -975,13 +1032,27 @@
     </div>
   {/if}
 
-  <div class="panes">
+  <div class="panes" bind:this={panesEl}>
     {#if activeTab && settings}
       {#each activeTab.panes as pane, i (pane.id)}
         {#if i > 0}
-          <div class="divider" />
+          <!-- 見た目は1pxのままにして、当たり判定だけ広げる（::after）。
+               1pxを狙わせるのは、掴めるという事実ごと隠すのと変わらない。 -->
+          <div
+            class="divider"
+            class:dragging={resizing?.left === i - 1}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="ペインの幅"
+            title="ドラッグで幅を変える／ダブルクリックで揃える"
+            on:pointerdown={(ev) => startResize(i - 1, ev)}
+            on:pointermove={moveResize}
+            on:pointerup={endResize}
+            on:pointercancel={endResize}
+            on:dblclick={equalizePanes}
+          />
         {/if}
-        <div class="slot" data-pane-id={pane.id}>
+        <div class="slot" data-pane-id={pane.id} style:flex="{pane.weight ?? 1} 1 0%">
           {#if pane.kind === 'search'}
             <SearchPane
               bind:this={pane.ref}
@@ -1245,7 +1316,9 @@
   }
   .slot {
     display: flex;
-    flex: 1;
+    /* 幅は重みで配る。flex-basis を 0 にしておくと、比がそのまま幅になる。
+       min-width は 0 のまま：最低幅は掴んだ時に止めるほうで守る。ここに下限を
+       置くと、狭い窓でペインを増やした時に合計がはみ出して横スクロールが出る。 */
     min-width: 0;
   }
 
@@ -1253,6 +1326,27 @@
     width: 1px;
     flex: none;
     background: #3a3a3a;
+    position: relative;
+    /* 当たり判定を隣のペインへはみ出させるので、その上に来る必要がある。
+       DOM 上はペインが後に来るため、これが無いと広げた判定に届かない。 */
+    z-index: 1;
+    cursor: col-resize;
+    /* 掴んでいる間に一覧の文字が選択されると、幅ではなく選択が伸びる。 */
+    user-select: none;
+    touch-action: none;
+  }
+  /* 当たり判定。見た目の線は1pxのまま、左右へ3pxずつはみ出させる。 */
+  .divider::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -3px;
+    right: -3px;
+  }
+  .divider:hover,
+  .divider.dragging {
+    background: #5a8fc4;
   }
 
   .loading {

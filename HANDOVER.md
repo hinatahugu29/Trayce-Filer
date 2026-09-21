@@ -453,3 +453,4 @@ Trayce and ChainFlow Filer are separate products on separate axes (many windows 
 - `65ff97f` — `perf: stop restating the whole history on every move`
 - `3ee359e` — `fix: recognise the same folder when it is spelled differently`
 - `9d9f8bc` — `fix: skip junctions instead of failing the whole copy on one`
+- `b760949` — `fix: let the columns follow the names, not a width threshold`
