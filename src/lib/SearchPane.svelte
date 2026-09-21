@@ -770,7 +770,7 @@
   .empty p { margin: 8px 0 3px; }
   .empty small { color: #68727a; }
   .result-area { display: flex; flex: 1; min-height: 0; }
-  .list-slot { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; container-type: inline-size; }
+  .list-slot { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
   .preview-slot { width: 260px; min-width: 160px; border-left: 1px solid #2c2c2c; }
   @media (max-width: 700px) { .history-rail { width: 180px; } }
 </style>
