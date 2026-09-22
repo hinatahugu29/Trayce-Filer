@@ -64,3 +64,40 @@ export function splitWeight(weights: number[], at: number): number[] {
   next.splice(at + 1, 0, half)
   return next
 }
+
+/**
+ * `at` 番目のペインを `deltaPx` だけ太らせる（負なら痩せさせる）。
+ *
+ * 増減ぶんは他のペインが今の幅に比例して負担する。隣だけに押し付けると、
+ * 3枚以上の時に隣がすぐ最低幅に当たって止まり、「回しても動かない」になる。
+ * 他のペインは最低幅より細くしない。取れるぶんが足りなければ、取れたぶんだけ動く。
+ */
+export function growAt(
+  weights: number[],
+  at: number,
+  deltaPx: number,
+  totalPx: number
+): number[] {
+  if (at < 0 || at >= weights.length || weights.length < 2 || totalPx <= 0) return weights
+  const sum = weights.reduce((total, weight) => total + weight, 0)
+  if (sum <= 0) return weights
+  const pxPerWeight = totalPx / sum
+  const px = weights.map((weight) => weight * pxPerWeight)
+
+  const others = px.map((_, index) => index).filter((index) => index !== at)
+  let delta = deltaPx
+  if (delta > 0) {
+    // 他から取れるのは、最低幅を超えている余りまで。
+    const spare = others.reduce((total, index) => total + Math.max(0, px[index] - MIN_PANE_PX), 0)
+    delta = Math.min(delta, spare)
+    if (delta <= 0) return weights
+    for (const index of others) px[index] -= (delta * Math.max(0, px[index] - MIN_PANE_PX)) / spare
+  } else {
+    delta = Math.max(delta, MIN_PANE_PX - px[at])
+    if (delta >= 0) return weights
+    const othersPx = others.reduce((total, index) => total + px[index], 0)
+    for (const index of others) px[index] -= (delta * px[index]) / othersPx
+  }
+  px[at] += delta
+  return px.map((value) => value / pxPerWeight)
+}

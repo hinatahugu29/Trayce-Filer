@@ -12,7 +12,7 @@
   import LayoutPalette from './LayoutPalette.svelte'
   import { applyLayout, captureLayout } from './layouts'
   import * as navstats from './navstats'
-  import { resizeAt, splitWeight, DIVIDER_PX } from './panesize'
+  import { resizeAt, splitWeight, growAt, DIVIDER_PX } from './panesize'
 
   const win = getCurrentWindow()
   const label = win.label
@@ -535,6 +535,33 @@
     resizing = null
   }
 
+  /**
+   * Alt+ホイールで、ポインターの下のペインを太らせる/痩せさせる。
+   *
+   * 区切りを掴むには区切りまで手を運ぶ必要があるが、「いま見ているこのペインを
+   * もう少し広く」はその場で済ませたい。1目盛りの量は固定にする。ホイールの
+   * deltaY は機器ごとにばらつくので、それに比例させると同じ操作で動く量が変わる。
+   */
+  const WHEEL_STEP_PX = 40
+  function wheelResize(ev: WheelEvent) {
+    if (!ev.altKey || ev.ctrlKey || ev.shiftKey) return
+    // 一覧のスクロールに流さない。ペインが1枚でも、Alt+ホイールで一覧が動くのは意図と違う。
+    ev.preventDefault()
+    ev.stopPropagation()
+    const tab = activeTab
+    if (!tab || !panesEl || tab.panes.length < 2 || hoveredPaneId === null) return
+    const at = tab.panes.findIndex((pane) => pane.id === hoveredPaneId)
+    if (at < 0 || ev.deltaY === 0) return
+    const next = growAt(
+      tab.panes.map((pane) => pane.weight ?? 1),
+      at,
+      ev.deltaY < 0 ? WHEEL_STEP_PX : -WHEEL_STEP_PX,
+      panesEl.clientWidth - (tab.panes.length - 1) * DIVIDER_PX
+    )
+    tab.panes.forEach((pane, index) => (pane.weight = next[index]))
+    tabs = tabs
+  }
+
   /** 区切りのダブルクリック。触りすぎた時に元へ戻す手段が無いと、掴むのが怖くなる。 */
   function equalizePanes() {
     const tab = activeTab
@@ -1032,7 +1059,7 @@
     </div>
   {/if}
 
-  <div class="panes" bind:this={panesEl}>
+  <div class="panes" bind:this={panesEl} on:wheel|capture|nonpassive={wheelResize}>
     {#if activeTab && settings}
       {#each activeTab.panes as pane, i (pane.id)}
         {#if i > 0}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resizeAt, splitWeight, MIN_PANE_PX } from './panesize'
+import { resizeAt, splitWeight, growAt, MIN_PANE_PX } from './panesize'
 
 /** 重みを、その幅での実ピクセルへ直す。読みやすさのためのテスト用ヘルパー。 */
 const toPx = (weights: number[], totalPx: number) => {
@@ -73,5 +73,41 @@ describe('splitWeight', () => {
   it('範囲外は何もしない', () => {
     const weights = [1, 1]
     expect(splitWeight(weights, 5)).toBe(weights)
+  })
+})
+
+describe('growAt', () => {
+  const px = (weights: number[], total: number) => {
+    const sum = weights.reduce((a, b) => a + b, 0)
+    return weights.map((w) => (w / sum) * total)
+  }
+
+  it('widens the pane and takes the room from the others in proportion', () => {
+    const next = px(growAt([1, 1, 1], 0, 90, 1200), 1200)
+    expect(next[0]).toBeCloseTo(490)
+    expect(next[1]).toBeCloseTo(355)
+    expect(next[2]).toBeCloseTo(355)
+  })
+
+  it('narrows the pane and hands the room back', () => {
+    const next = px(growAt([1, 1], 1, -100, 1000), 1000)
+    expect(next).toEqual([expect.closeTo(600), expect.closeTo(400)])
+  })
+
+  it('never pushes another pane below the minimum', () => {
+    const next = px(growAt([1, 1, 1], 1, 10000, 1200), 1200)
+    expect(next[0]).toBeCloseTo(MIN_PANE_PX)
+    expect(next[2]).toBeCloseTo(MIN_PANE_PX)
+    expect(next[1]).toBeCloseTo(1200 - MIN_PANE_PX * 2)
+  })
+
+  it('never shrinks the pane itself below the minimum', () => {
+    const next = px(growAt([1, 1], 0, -10000, 1000), 1000)
+    expect(next[0]).toBeCloseTo(MIN_PANE_PX)
+  })
+
+  it('leaves a single pane alone', () => {
+    const weights = [1]
+    expect(growAt(weights, 0, 50, 800)).toBe(weights)
   })
 })
