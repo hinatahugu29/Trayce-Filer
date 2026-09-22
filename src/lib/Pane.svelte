@@ -1070,6 +1070,11 @@
         ev.preventDefault()
         onOpenSettings()
         break
+      case 'toggleSidebar':
+        if (ev.repeat) break
+        ev.preventDefault()
+        showTree = !showTree
+        break
       case 'layouts':
         ev.preventDefault()
         onOpenLayouts()
@@ -1300,7 +1305,7 @@
       </button>
       <button
         type="button"
-        title={showTree ? 'サイドバーを隠す' : 'サイドバーを出す'}
+        title={`${showTree ? 'サイドバーを隠す' : 'サイドバーを出す'} (${hint('toggleSidebar')})`}
         class:on={showTree}
         on:click={() => (showTree = !showTree)}
       >
@@ -1474,7 +1479,6 @@ onNavigate={open}
 
       <FileList
         bind:this={fileList}
-        dense={multi && !active}
         expandable={true}
         {entries}
         parent={listing?.parent ?? null}
@@ -1674,10 +1678,7 @@ onNavigate={open}
     color: #7fb0e8;
   }
 
-  /* FileList の列の畳み方（@container）の基準。検索ペインと同じく、ここを幅の容器にする。
-     指定が無いと規則が効かず、狭いペインで固定幅の列に押されて名前の列が消えていた。 */
   .list-slot {
-    container-type: inline-size;
     position: relative;
     display: flex;
     flex-direction: column;

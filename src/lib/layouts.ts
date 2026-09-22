@@ -108,6 +108,8 @@ export type PaneSnapshot = {
   pinned?: boolean
   sidebar?: SavedSidebarState
   query?: string
+  /** 幅の重み。未設定は1（均等）。 */
+  weight?: number
 }
 
 /** いまの並びを、基準フォルダから見た配置テンプレートにする。 */
@@ -123,6 +125,7 @@ export function captureLayout(name: string, panes: PaneSnapshot[], anchor: strin
         pinned: pane.pinned ?? false,
         sidebar: pane.sidebar,
         query: pane.query ?? '',
+        weight: pane.weight,
       }
     }),
   }
@@ -136,6 +139,7 @@ export function applyLayout(layout: Layout, anchor: string): PaneSnapshot[] {
     pinned: pane.pinned,
     sidebar: pane.sidebar,
     query: pane.query,
+    weight: pane.weight,
   }))
 }
 

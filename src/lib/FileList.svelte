@@ -10,6 +10,7 @@
   import { startDrag } from '@crabnebula/tauri-plugin-drag'
   import { fileIcon, formatSize, formatModified, joinPath, pathIdentity } from './api'
   import { armMiddleClick, onMiddleClick } from './middleclick'
+  import { pickColumns, representativeName, NAME_CHROME } from './columns'
   import * as prefetch from './prefetch'
   import type { Entry, SortKey, SortSpec } from './api'
 
@@ -40,14 +41,6 @@
   export let resolvePath: (entry: Entry) => string = (entry) => joinPath(path, entry.name)
   /** Optional second line used by virtual listings to show the source directory. */
   export let secondaryLabel: (entry: Entry) => string = () => ''
-  /**
-   * 情報を落とした表示。
-   *
-   * 注目していないペインで種類・サイズ・更新日時をフルに出しても、実際に読まれるのは
-   * 名前だけで、その名前が幅を奪われて省略される。見られていない列を畳んで、
-   * 残った幅を名前へ回す。
-   */
-  export let dense = false
   /**
    * フォルダ行をその場で展開できるようにする。
    *
@@ -612,6 +605,34 @@
     }
   }
 
+  // ---- 列をどこまで出すか ----
+  //
+  // 幅のしきい値では決められない。同じ幅でも、名前が短いフォルダなら更新日時まで
+  // 入るし、名前が長ければサイズだけで一杯になる。実際に並んでいる名前を測る。
+
+  /** 行の字面。CSS の `.row` と揃えること。ここがずれると測った幅が当てにならない。 */
+  const ROW_FONT = "12.5px 'Segoe UI', system-ui, sans-serif"
+
+  let measurer: CanvasRenderingContext2D | null = null
+  function textWidth(text: string): number {
+    if (!measurer) {
+      measurer = document.createElement('canvas').getContext('2d')
+      if (measurer) measurer.font = ROW_FONT
+    }
+    // 取れない環境では文字数から概算する。列が1本ずれる程度で、表示は壊れない。
+    return measurer ? measurer.measureText(text).width : text.length * 7
+  }
+
+  /** 一覧の幅。スクロールバーを除いた、行が実際に使える幅。 */
+  let listWidth = 0
+
+  $: sampleName = representativeName(entries.map((entry) => entry.name))
+  $: wantedName = Math.ceil(textWidth(sampleName)) + NAME_CHROME
+  $: shownColumns = pickColumns(listWidth, wantedName)
+  $: hideSize = !shownColumns.includes('size')
+  $: hideTime = !shownColumns.includes('modified')
+  $: hideExt = !shownColumns.includes('ext')
+
   const columns: { key: SortKey; label: string; cls: string }[] = [
     { key: 'name', label: '名前', cls: 'c-name' },
     { key: 'ext', label: '種類', cls: 'c-ext' },
@@ -620,7 +641,7 @@
   ]
 </script>
 
-<div class="head" class:dense>
+<div class="head" class:hide-size={hideSize} class:hide-time={hideTime} class:hide-ext={hideExt}>
   {#each columns as col}
     <button
       type="button"
@@ -637,7 +658,10 @@
 <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
 <div
   class="viewport"
-  class:dense
+  class:hide-size={hideSize}
+  class:hide-time={hideTime}
+  class:hide-ext={hideExt}
+  bind:clientWidth={listWidth}
   tabindex="0"
   role="listbox"
   aria-label="ファイル一覧"
@@ -947,22 +971,11 @@
     white-space: nowrap;
   }
 
-  /* 検索元と作業先を並べた狭い幅では、重要度の低い列から畳む。 */
-  @container (max-width: 520px) {
-    .c-time { display: none; }
-  }
-  @container (max-width: 380px) {
-    .c-ext { display: none; }
-    .c-size { width: 58px; }
-  }
-
-  /* 注目していないペイン。幅ではなく注意の量に応じて情報を落とす。
-     サイズだけは残す：転送先を選ぶ時に「入るかどうか」の手掛かりになる。 */
-  .dense .c-ext,
-  .dense .c-time {
+  /* どの列を畳むかは columns.ts が決める（幅としきい値ではなく、名前が要る幅から）。
+     見出しと行の両方に同じ印を付けるので、片方だけずれることがない。 */
+  .hide-ext .c-ext,
+  .hide-size .c-size,
+  .hide-time .c-time {
     display: none;
-  }
-  .dense .c-size {
-    width: 62px;
   }
 </style>

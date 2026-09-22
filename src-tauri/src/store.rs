@@ -156,6 +156,9 @@ pub struct SavedPaneState {
   pub selected_entry: Option<String>,
   #[serde(default)]
   pub scroll_top: Option<f64>,
+  /// 幅の重み。古いセッションには無いので、無ければ均等として扱う。
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub weight: Option<f64>,
   /// 訪れた場所ごとの作業状態。新しいものが先頭の LRU で、上限は保存する側で切る。
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub path_states: Vec<SavedPathState>,
@@ -219,6 +222,9 @@ pub struct LayoutPane {
   pub sidebar: Option<SavedSidebarState>,
   /// 検索ペインとして展開する時の初期検索語。
   pub query: String,
+  /// 幅の重み。配置は「ペインの並び」なので、幅もその一部として覚える。
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub weight: Option<f64>,
 }
 
 /// 名前を付けて呼び出せるペイン配置。

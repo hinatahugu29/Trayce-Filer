@@ -45,6 +45,7 @@ export type ActionId =
   | 'trayToggle'
   | 'toggleHidden'
   | 'layouts'
+  | 'toggleSidebar'
   | 'swapWindow'
   | 'cycleWindow'
   | 'cycleWindowBack'
@@ -125,6 +126,8 @@ export const ACTIONS: ActionDef[] = [
   // 保存した配置そのものは Ctrl+1..9 で直接呼ぶ。番号は一覧の並び順から決まる
   // 位置指定で、アクション1つ1つに割り当てるものではないのでここには並べない。
   { id: 'layouts', label: '配置を開く', fallback: 'Ctrl+E', group: '配置' },
+  // 分割時は横幅が足りなくなる。☰ まで手を運ばずに畳めるようにする。
+  { id: 'toggleSidebar', label: 'サイドバーの開閉', fallback: 'Ctrl+B', group: '配置' },
 
   { id: 'settings', label: '設定を開く', fallback: 'Ctrl+,', group: 'その他' },
 ]
