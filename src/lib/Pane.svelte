@@ -1070,6 +1070,11 @@
         ev.preventDefault()
         onOpenSettings()
         break
+      case 'toggleSidebar':
+        if (ev.repeat) break
+        ev.preventDefault()
+        showTree = !showTree
+        break
       case 'layouts':
         ev.preventDefault()
         onOpenLayouts()
@@ -1300,7 +1305,7 @@
       </button>
       <button
         type="button"
-        title={showTree ? 'サイドバーを隠す' : 'サイドバーを出す'}
+        title={`${showTree ? 'サイドバーを隠す' : 'サイドバーを出す'} (${hint('toggleSidebar')})`}
         class:on={showTree}
         on:click={() => (showTree = !showTree)}
       >
