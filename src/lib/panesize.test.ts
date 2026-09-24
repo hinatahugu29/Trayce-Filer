@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resizeAt, splitWeight, growAt, MIN_PANE_PX } from './panesize'
+import { resizeAt, splitWeight, growAt, shares, MIN_PANE_PX } from './panesize'
 
 /** 重みを、その幅での実ピクセルへ直す。読みやすさのためのテスト用ヘルパー。 */
 const toPx = (weights: number[], totalPx: number) => {
@@ -109,5 +109,39 @@ describe('growAt', () => {
   it('leaves a single pane alone', () => {
     const weights = [1]
     expect(growAt(weights, 0, 50, 800)).toBe(weights)
+  })
+})
+
+describe('shares', () => {
+  // 報告された症状そのもの。2枚を 0.5 ずつで並べ、右を W で閉じると
+  // 残りの重みは 0.5。flex-grow 0.5 は余白を半分しか配らないので、
+  // 1枚になっても画面の半分のままで止まっていた。
+  it('ペインを閉じて合計が 1 を下回っても、残りが画面を埋める', () => {
+    const afterSplit = splitWeight([1], 0)
+    expect(afterSplit).toEqual([0.5, 0.5])
+
+    const afterClose = [afterSplit[0]] // 右を閉じた
+    expect(shares(afterClose)).toEqual([1])
+  })
+
+  it('合計を 1 に揃える', () => {
+    const got = shares([0.25, 0.25])
+    expect(got[0] + got[1]).toBeCloseTo(1)
+    expect(got).toEqual([0.5, 0.5])
+  })
+
+  // 幅を揃えると全部 1 になる（合計 3）。比が変わってはいけない。
+  it('比は変えない', () => {
+    expect(shares([1, 1, 1]).map((v) => Number(v.toFixed(4)))).toEqual([0.3333, 0.3333, 0.3333])
+    expect(shares([3, 1])).toEqual([0.75, 0.25])
+  })
+
+  // 壊れた保存データで全部 0 だと 0 除算になり、幅が NaN になって消える。
+  it('重みが全部 0 なら等分に倒す', () => {
+    expect(shares([0, 0])).toEqual([0.5, 0.5])
+  })
+
+  it('空でも落ちない', () => {
+    expect(shares([])).toEqual([])
   })
 })
