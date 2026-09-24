@@ -12,7 +12,7 @@
   import LayoutPalette from './LayoutPalette.svelte'
   import { applyLayout, captureLayout } from './layouts'
   import * as navstats from './navstats'
-  import { resizeAt, splitWeight, growAt, DIVIDER_PX } from './panesize'
+  import { resizeAt, splitWeight, growAt, shares, DIVIDER_PX } from './panesize'
 
   const win = getCurrentWindow()
   const label = win.label
@@ -274,6 +274,9 @@
   }
 
   $: activeTab = tabs.find((t) => t.id === activeTabId)
+  // flex-grow は合計が 1 未満だと余白を配りきらない。ペインを閉じると合計が減るため、
+  // 渡す直前にここで揃える（閉じる側で配り直すと、切り離し・配置・復元でも同じ手当が要る）。
+  $: paneShares = shares((activeTab?.panes ?? []).map((pane) => pane.weight ?? 1))
   $: if (ready && activeTab) syncWindowTray(activeTab.trayItems)
   $: if (ready && activeTab) syncWindowContext()
 
@@ -284,9 +287,9 @@
    * 選択やペインの切り替えでも起きるので、素直に送ると何も変わっていない
    * 通知でIPCを叩き続けることになる。
    */
-  let lastTrayKey = ' '
+  let lastTrayKey = '\0'
   function syncWindowTray(items: string[]) {
-    const key = items.join(' ')
+    const key = items.join('\0')
     if (key === lastTrayKey) return
     lastTrayKey = key
     api.setWindowTray(label, items).catch(() => {})
@@ -1079,7 +1082,7 @@
             on:dblclick={equalizePanes}
           />
         {/if}
-        <div class="slot" data-pane-id={pane.id} style:flex="{pane.weight ?? 1} 1 0%">
+        <div class="slot" data-pane-id={pane.id} style:flex="{paneShares[i] ?? 1} 1 0%">
           {#if pane.kind === 'search'}
             <SearchPane
               bind:this={pane.ref}
