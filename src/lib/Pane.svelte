@@ -197,6 +197,8 @@
 
   let sidebar: Sidebar | null = null
   let isFavorite = false
+  /** ネットワーク共有か。完全削除メニューを出すかどうかの判定に使う。 */
+  let isNetworkLocation = false
 
   /**
    * プレビューパネル（右側）。
@@ -400,6 +402,7 @@
       // 訪れた場所を履歴に積む。ここが「さっき見てたやつ」を辿る唯一の入口。
       await api.recordHistory(listing.path)
       await syncFavoriteState()
+      await syncNetworkState()
       sidebar?.refresh()
 
       // 親と、見えている子フォルダを裏で読んでおく。次の一手はほぼこのどれか。
@@ -835,6 +838,25 @@
     }
   }
 
+  /**
+   * 完全削除。ネットワーク共有限定（ゴミ箱が無い/極端に遅いことがあるため）。
+   *
+   * 取り消せないので、ゴミ箱より強い文言で確認する。設定の「確認しない」は
+   * ゴミ箱送り前提の設定なので、ここには適用しない。
+   */
+  async function deleteSelectionPermanently(paths: string[]) {
+    if (!paths.length) return
+    const label = paths.length === 1 ? paths[0].split(/[\\/]/).pop() : `${paths.length}件`
+    if (!confirm(`${label} を完全に削除します。元に戻せません。よろしいですか？`)) return
+    try {
+      const n = await api.deleteEntriesPermanently(paths)
+      onNote(`完全に削除 ${n}件`)
+      await reload()
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
   /** 集計に数えない移動。★のファイル行から、含まれる場所を開く時に使う。 */
   function goToUncounted(path: string) {
     open(path, { counted: false })
@@ -845,6 +867,18 @@
     // 大文字小文字や末尾の区切りが違うだけで ☆ が消えないよう、Rust 側と同じ同一性で見る。
     const here = listing ? api.pathIdentity(listing.path) : null
     isFavorite = here !== null && favorites.some((path) => api.pathIdentity(path) === here)
+  }
+
+  async function syncNetworkState() {
+    if (!listing) {
+      isNetworkLocation = false
+      return
+    }
+    try {
+      isNetworkLocation = await api.isNetworkPath(listing.path)
+    } catch {
+      isNetworkLocation = false
+    }
   }
 
   async function toggleFavorite() {
@@ -975,6 +1009,10 @@
           // 置換・連番・大文字小文字をまとめて。適用前に一覧で確かめられ、Ctrl+Z で戻せる。
           { kind: 'item', label: n > 1 ? `${n}件の名前をまとめて変更…` : 'まとめて名前を変更…', disabled: n === 0, run: startBulkRename },
           { kind: 'item', label: 'ゴミ箱へ送る', hint: hint('trash'), danger: true, run: () => trashSelection(selection) },
+          // ネットワーク共有はゴミ箱が使えない/遅いことがあるので、その場所でだけ出す。
+          ...(isNetworkLocation
+            ? ([{ kind: 'item', label: '完全に削除（元に戻せません）', danger: true, run: () => deleteSelectionPermanently(selection) }] as MenuItem[])
+            : []),
         ]
       : [
           // 空き領域＝「この場所」に対する操作。

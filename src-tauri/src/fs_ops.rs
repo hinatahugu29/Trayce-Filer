@@ -311,6 +311,12 @@ pub fn transfer_pub(
   // 上書きでゴミ箱へ送った既存項目の元の場所。undo でゴミ箱から戻すために返す。
   let replaced = std::cell::RefCell::new(Vec::new());
   let to_trash = |path: &Path| {
+    // ネットワーク共有はゴミ箱が無い/極端に遅いことがあるので直接削除する。
+    // 取り消せないので replaced には入れない（= この分は undo で戻せない）。
+    if path_is_network(path) {
+      return if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }
+        .map_err(|e| format!("{} を削除できません: {e}", path.display()));
+    }
     trash::delete(path).map_err(|e| format!("{} をゴミ箱へ送れません: {e}", path.display()))?;
     replaced.borrow_mut().push(path.to_path_buf());
     Ok(())
@@ -866,8 +872,9 @@ fn rename_entry_impl(path: &str, new_name: &str) -> Result<PathBuf, String> {
 
 /// ゴミ箱へ送る。
 ///
-/// **完全削除は提供しない。** ファイラの誤操作で戻せなくなるのが一番怖いので、
-/// OS のゴミ箱に委ねて取り消せる状態を保つ。
+/// ファイラの誤操作で戻せなくなるのが一番怖いので、OS のゴミ箱に委ねて取り消せる
+/// 状態を保つ。完全削除は `delete_entries_permanently` としてネットワーク共有限定で
+/// 別に用意している（ゴミ箱が使えない/遅い場所でしか使わせない）。
 #[tauri::command]
 pub fn trash_entries(app: tauri::AppHandle, paths: Vec<String>) -> Result<usize, String> {
   use tauri::Manager;
@@ -1072,6 +1079,67 @@ pub(crate) fn validate_name(name: &str) -> Result<(), String> {
   Ok(())
 }
 
+/// ネットワーク共有上のパスか（UNC直指定 `\\server\share\...` と、
+/// ドライブ文字に割り当てたネットワーク共有 `T:\...` の両方を見る）。
+///
+/// ゴミ箱はネットワーク共有では使えないか、使えても極端に遅いことがある。
+/// 完全削除をネットワーク限定で許す線引きに使うので、ローカルのドライブを
+/// 誤って true にしないよう、判定できない時は false に倒す。
+#[cfg(windows)]
+pub(crate) fn path_is_network(p: &Path) -> bool {
+  let raw = p.to_string_lossy();
+  if raw.strip_prefix(r"\\?\UNC\").is_some() || (raw.starts_with(r"\\") && !raw.starts_with(r"\\?\")) {
+    return true;
+  }
+  // `canonicalize` が付ける `\\?\` を外してからドライブ文字を見る。
+  let stripped = raw.strip_prefix(r"\\?\").unwrap_or(&raw);
+  let Some(root) = stripped.get(0..2) else { return false };
+  if !root.ends_with(':') {
+    return false;
+  }
+  let wide: Vec<u16> = format!("{root}\\").encode_utf16().chain(std::iter::once(0)).collect();
+  use windows::core::PCWSTR;
+  use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+  use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
+  unsafe { GetDriveTypeW(PCWSTR(wide.as_ptr())) == DRIVE_REMOTE }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn path_is_network(_p: &Path) -> bool {
+  false
+}
+
+/// ネットワーク共有限定の完全削除。
+///
+/// ゴミ箱はネットワーク共有では使えない/極端に遅いことがあり、特に上書きコピーの
+/// たびに詰まるのが辛い。完全削除は元に戻せないので、その保険が効くローカルの
+/// ドライブには使わせない（誤操作はゴミ箱に任せたい）。
+#[tauri::command(async)]
+pub fn delete_entries_permanently(paths: Vec<String>) -> Result<usize, String> {
+  if paths.is_empty() {
+    return Ok(0);
+  }
+  for raw in &paths {
+    let path = Path::new(raw);
+    if !path_is_network(path) {
+      return Err(format!("{} はネットワーク上のフォルダではないため使えません（ゴミ箱をお使いください）", path.display()));
+    }
+  }
+  for raw in &paths {
+    let path = Path::new(raw);
+    let result = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
+    result.map_err(|e| format!("{} を削除できません: {e}", path.display()))?;
+  }
+  Ok(paths.len())
+}
+
+/// フロントが「このフォルダはネットワーク共有か」を確かめるための窓口。
+/// 完全削除メニューを出すかどうかの判定に使う。
+#[tauri::command]
+pub fn is_network_path(path: String) -> bool {
+  path_is_network(Path::new(&path))
+}
+
 /// Windows の `canonicalize` は `\\?\C:\...` を返す。
 /// この形式は他アプリに渡すと解釈されないことがあるので、表示にもドラッグにも使えるよう剥がす。
 pub(crate) fn strip_unc(p: &Path) -> String {
@@ -1138,6 +1206,19 @@ mod tests {
   #[test]
   fn network_share_prefix_becomes_a_normal_unc_path() {
     assert_eq!(strip_unc(Path::new(r"\\?\UNC\server\TK\品質管理")), r"\\server\TK\品質管理");
+  }
+
+  #[test]
+  fn unc_paths_are_detected_as_network_without_asking_the_os() {
+    // ドライブ文字はディスクの実体を OS に聞かないと分からないが、UNC は
+    // 文字列だけで判定できる。ここはその分岐だけを固定する。
+    assert!(path_is_network(Path::new(r"\\server\share\file.txt")));
+    assert!(path_is_network(Path::new(r"\\?\UNC\server\share\file.txt")));
+  }
+
+  #[test]
+  fn verbatim_local_paths_are_not_network() {
+    assert!(!path_is_network(Path::new(r"\\?\C:\tmp\file.txt")));
   }
 
   #[test]

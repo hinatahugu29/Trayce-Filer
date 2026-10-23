@@ -36,6 +36,22 @@
   $: scopeLabel = scopes.length > 1 ? `${scopes.length}か所` : splitPath(scopes[0]).tail || scopes[0]
   let results: api.SearchEntry[] = []
 
+  /** 新規・既存どちらの検索ペインも既定はファイルのみ（古い保存データは typeFilter を持たない）。 */
+  $: typeFilter = search.typeFilter ?? 'file'
+  const typeFilterOrder: api.SearchTypeFilter[] = ['file', 'dir', 'all']
+  const typeFilterLabels: Record<api.SearchTypeFilter, string> = { file: 'ファイル', dir: 'フォルダ', all: '全部' }
+
+  /** 検索語にユーザーが見ない `type:` 条件を足して送る。表示中のクエリ欄には反映しない。 */
+  function withTypeFilter(query: string, filter: api.SearchTypeFilter): string {
+    return filter === 'all' ? query : `${query} type:${filter}`.trim()
+  }
+
+  function cycleTypeFilter() {
+    const next = typeFilterOrder[(typeFilterOrder.indexOf(typeFilter) + 1) % typeFilterOrder.length]
+    onSearchChange({ ...search, typeFilter: next })
+    requestFilter({}, next)
+  }
+
   /**
    * プレビューの対象。検索結果のフォルダも覗けるようにする。
    * 通常ペインと同じく、移動せずに中身を確かめられるほうが往復が減る。
@@ -236,7 +252,7 @@
     status = paused ? '一時停止中（検索は使えます）' : '読み込みを再開しています…'
   }
 
-  function requestFilter(override: Partial<api.SearchFilterOptions> = {}) {
+  function requestFilter(override: Partial<api.SearchFilterOptions> = {}, filterOverride?: api.SearchTypeFilter) {
     if (!requestId) {
       // 停止後に検索語をいじった時。黙って無視すると、打っても結果が変わらない理由が
       // どこにも出ない。
@@ -244,14 +260,16 @@
       return
     }
     const id = ++filterRequestId
+    const rawQuery = override.query ?? search.query
+    const query = withTypeFilter(rawQuery, filterOverride ?? typeFilter)
     api.filterSearch(requestId, id, {
-      query: search.query,
       matchPath: search.matchPath,
       sortKey: sort.key,
       descending: sort.descending,
       dirsFirst: sort.dirsFirst,
       limit: 500,
       ...override,
+      query,
     }).catch((error) => {
       if (id === filterRequestId) status = String(error)
     })
@@ -584,6 +602,12 @@
       }}
     />
     <button type="button" class:on={search.matchPath} title="ファイル名だけでなくフォルダのパスも検索" on:click={toggleMatchPath}>パス</button>
+    <button
+      type="button"
+      class:on={typeFilter !== 'all'}
+      title={`表示対象: ${typeFilterLabels[typeFilter]}（クリックで切替: ファイル→フォルダ→全部）`}
+      on:click={cycleTypeFilter}
+    >{typeFilterLabels[typeFilter]}</button>
     {#if running}
       <button type="button" class:on={paused} on:click={togglePause}>{paused ? '再開' : '一時停止'}</button>
       <!-- 一時停止と違い、読み込み済みの索引まで捨てる。押す前に分かるようにしておく。 -->
