@@ -165,6 +165,8 @@ pub fn run() {
       rename::plan_bulk_rename,
       rename::apply_bulk_rename,
       fs_ops::trash_entries,
+      fs_ops::delete_entries_permanently,
+      fs_ops::is_network_path,
       fs_ops::complete_path,
       fs_ops::preview_entry,
       fs_ops::measure_folder,

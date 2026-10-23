@@ -241,8 +241,18 @@ export const planBulkRename = (paths: string[], rule: RenameRule) =>
 export const applyBulkRename = (paths: string[], rule: RenameRule) =>
   invoke<number>('apply_bulk_rename', { paths, rule })
 
-/** ゴミ箱へ送る。完全削除は用意しない（誤操作で戻せないのを避けるため）。 */
+/** ゴミ箱へ送る。 */
 export const trashEntries = (paths: string[]) => invoke<number>('trash_entries', { paths })
+
+/**
+ * 完全削除。ネットワーク共有限定（Rust 側でも同じ条件を確かめる）。
+ * 取り消せないので、ゴミ箱が使えるローカルのドライブでは使わせない。
+ */
+export const deleteEntriesPermanently = (paths: string[]) =>
+  invoke<number>('delete_entries_permanently', { paths })
+
+/** このパスがネットワーク共有（UNC直指定・マップ済みドライブとも）か。 */
+export const isNetworkPath = (path: string) => invoke<boolean>('is_network_path', { path })
 
 /** フォルダの中身の合計。大きな木では時間がかかる（別スレッドで数える）。 */
 export const measureFolder = (path: string) =>
