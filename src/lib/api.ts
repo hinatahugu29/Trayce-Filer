@@ -413,10 +413,13 @@ export type SavedSidebarState = {
   secondary?: SidebarTab
   splitRatio?: number
 }
+export type SearchTypeFilter = 'all' | 'dir' | 'file'
 export type SavedSearchState = {
   scopePaths: string[]
   query: string
   matchPath: boolean
+  /** フォルダ・ファイルどちらを対象にするか。既定はファイルのみ。 */
+  typeFilter?: SearchTypeFilter
   sortKey?: SortKey
   sortDescending?: boolean
   dirsFirst?: boolean
